@@ -1,391 +1,280 @@
--- =======================================================
---      LYREX HUB v11 🔮 | MM2 FULL-PACK (BYPASS EDITION)
--- =======================================================
-
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
+local UserInputService = game:GetService("UserInputService")
 local Workspace = game:GetService("Workspace")
-local CoreGui = game:GetService("CoreGui")
-local Lighting = game:GetService("Lighting")
-local ReplicatedStorage = game:GetService("ReplicatedStorage")
-local VirtualUser = game:GetService("VirtualUser")
+local TweenService = game:GetService("TweenService")
+
 local LocalPlayer = Players.LocalPlayer
+local PlayerGui = LocalPlayer:WaitForChild("PlayerGui")
 
--- BLUR VE ESKİ MENÜ TEMİZLİĞİ
-for _, v in pairs(Lighting:GetChildren()) do
-    if v:IsA("BlurEffect") then v:Destroy() end
-end
-if CoreGui:FindFirstChild("LyrexFullHub") then CoreGui.LyrexFullHub:Destroy() end
-
--- AYARLAR VE DEĞİŞKENLER
-local Config = {
-    ESP_Players = false,
-    ESP_Gun = false,
-    ESP_Coins = false,
-    AutoFarmCoins = false,
-    Noclip = false,
-    WalkSpeed = 25, -- Kick yememek için güvenli 25 hızı
-    SpeedToggle = false,
-    JumpPower = 70, -- Safe Jump
-    JumpToggle = false,
-    InfiniteJump = false,
-    SpinBot = false,
-    SpinSpeed = 30
+-- OYUN AYARLARI (Menü üzerinden anlık kontrol edilir)
+local SETTINGS = {
+	BallESP = true,              -- Top ESP
+	TrajectoryPreview = true,    -- Şut Yörünge Göstergesi
+	AutoTackle = true,           -- Otomatik Kayma / Top Kapma
+	CurveShot = true,            -- Kavisli/Falsolu Şut
+	CurvePower = 1.2,
+	AutoTackleDistance = 10
 }
 
-local KnifeSkins = {
-    ["Corrupt"] = {Mesh = "rbxassetid://247000808", Texture = "rbxassetid://247000825"},
-    ["Harvester"] = {Mesh = "rbxassetid://11382408013", Texture = "rbxassetid://11382407886"},
-    ["Nik's Scythe"] = {Mesh = "rbxassetid://193026211", Texture = "rbxassetid://193026227"},
-    ["Candy"] = {Mesh = "rbxassetid://321285226", Texture = "rbxassetid://321285244"},
-    ["Icebreaker"] = {Mesh = "rbxassetid://6112999719", Texture = "rbxassetid://6112999581"}
-}
+----------------------------------------------------------------------
+-- 1. ARAYÜZ (GUI) OLUŞTURMA SİSTEMİ
+----------------------------------------------------------------------
+local screenGui = Instance.new("ScreenGui")
+screenGui.Name = "SoccerProMenuGui"
+screenGui.ResetOnSpawn = false
+screenGui.Parent = PlayerGui
 
--- ANTI-AFK
-LocalPlayer.Idled:Connect(function()
-    VirtualUser:Button2Down(Vector2.new(0,0), Workspace.CurrentCamera.CFrame)
-    task.wait(1)
-    VirtualUser:Button2Up(Vector2.new(0,0), Workspace.CurrentCamera.CFrame)
+-- Menü Ana Çerçeve
+local mainFrame = Instance.new("Frame")
+mainFrame.Name = "MainFrame"
+mainFrame.Size = UDim2.new(0, 260, 0, 320)
+mainFrame.Position = UDim2.new(0.05, 0, 0.3, 0)
+mainFrame.BackgroundColor3 = Color3.fromRGB(25, 25, 35)
+mainFrame.BorderSizePixel = 0
+mainFrame.Active = true
+mainFrame.Draggable = true
+mainFrame.Parent = screenGui
+
+local frameCorner = Instance.new("UICorner")
+frameCorner.CornerRadius = UDim.new(0, 10)
+frameCorner.Parent = mainFrame
+
+-- Başlık Barı
+local titleLabel = Instance.new("TextLabel")
+titleLabel.Size = UDim2.new(1, 0, 0, 40)
+titleLabel.BackgroundColor3 = Color3.fromRGB(35, 35, 50)
+titleLabel.Text = "SOKAK FUTBOLU PRO v1.0"
+titleLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
+titleLabel.TextSize = 14
+titleLabel.Font = Enum.Font.GothamBold
+titleLabel.Parent = mainFrame
+
+local titleCorner = Instance.new("UICorner")
+titleCorner.CornerRadius = UDim.new(0, 10)
+titleCorner.Parent = titleLabel
+
+-- Buton Listesi Düzeni
+local listLayout = Instance.new("UIListLayout")
+listLayout.Parent = mainFrame
+listLayout.SortOrder = Enum.SortOrder.LayoutOrder
+listLayout.Padding = UDim.new(0, 8)
+listLayout.HorizontalAlignment = Enum.HorizontalAlignment.Center
+
+local padding = Instance.new("UIPadding")
+padding.PaddingTop = UDim.new(0, 50)
+padding.Parent = mainFrame
+
+-- Menü Açma/Kapama Butonu (Sol Üst Köşe)
+local toggleMenuBtn = Instance.new("TextButton")
+toggleMenuBtn.Name = "ToggleMenuBtn"
+toggleMenuBtn.Size = UDim2.new(0, 100, 0, 35)
+toggleMenuBtn.Position = UDim2.new(0, 15, 0, 15)
+toggleMenuBtn.BackgroundColor3 = Color3.fromRGB(30, 30, 45)
+toggleMenuBtn.Text = "MENÜ (K)"
+toggleMenuBtn.TextColor3 = Color3.fromRGB(0, 255, 127)
+toggleMenuBtn.Font = Enum.Font.GothamBold
+toggleMenuBtn.TextSize = 13
+toggleMenuBtn.Parent = screenGui
+
+local btnCorner = Instance.new("UICorner")
+btnCorner.CornerRadius = UDim.new(0, 8)
+btnCorner.Parent = toggleMenuBtn
+
+-- Dinamik Buton Oluşturma Fonksiyonu
+local function createToggleButton(name, settingKey)
+	local button = Instance.new("TextButton")
+	button.Size = UDim2.new(0.9, 0, 0, 45)
+	button.Font = Enum.Font.GothamSemibold
+	button.TextSize = 13
+	button.AutoButtonColor = true
+	button.Parent = mainFrame
+
+	local corner = Instance.new("UICorner")
+	corner.CornerRadius = UDim.new(0, 8)
+	corner.Parent = button
+
+	local function updateStyle()
+		if SETTINGS[settingKey] then
+			button.BackgroundColor3 = Color3.fromRGB(46, 139, 87)
+			button.Text = name .. ": AÇIK"
+			button.TextColor3 = Color3.fromRGB(255, 255, 255)
+		else
+			button.BackgroundColor3 = Color3.fromRGB(178, 34, 34)
+			button.Text = name .. ": KAPALI"
+			button.TextColor3 = Color3.fromRGB(200, 200, 200)
+		end
+	end
+
+	button.MouseButton1Click:Connect(function()
+		SETTINGS[settingKey] = not SETTINGS[settingKey]
+		updateStyle()
+	end)
+
+	updateStyle()
+end
+
+-- Menü Butonlarını Ekle
+createToggleButton("Top ESP", "BallESP")
+createToggleButton("Şut Yörüngesi", "TrajectoryPreview")
+createToggleButton("Otomatik Kayma", "AutoTackle")
+createToggleButton("Falsolu Şut", "CurveShot")
+
+-- Menü Gizle / Göster Mantığı
+local function toggleMenu()
+	mainFrame.Visible = not mainFrame.Visible
+end
+
+toggleMenuBtn.MouseButton1Click:Connect(toggleMenu)
+
+UserInputService.InputBegan:Connect(function(input, gameProcessed)
+	if not gameProcessed and input.KeyCode == Enum.KeyCode.K then
+		toggleMenu()
+	end
 end)
 
--- ROL TESPİTİ
-local function GetRole(plr)
-    if not plr or not plr.Character then return "Innocent" end
-    if plr.Backpack:FindFirstChild("Knife") or plr.Character:FindFirstChild("Knife") then return "Murderer" end
-    if plr.Backpack:FindFirstChild("Gun") or plr.Character:FindFirstChild("Gun") then return "Sheriff" end
-    return "Innocent"
+----------------------------------------------------------------------
+-- 2. OYUN MOTORU VE FİZİK SİSTEMİ
+----------------------------------------------------------------------
+
+-- Top Bulucu
+local function getBall()
+	for _, child in ipairs(Workspace:GetChildren()) do
+		if child.Name:lower():find("ball") or child.Name:lower():find("top") or child.Name:lower():find("football") then
+			if child:IsA("BasePart") then
+				return child
+			end
+		end
+	end
+	return nil
 end
 
--- GUI OLUŞTURMA
-local Gui = Instance.new("ScreenGui")
-Gui.Name = "LyrexFullHub"
-Gui.Parent = CoreGui
-Gui.ResetOnSpawn = false
-
--- MOBİL AÇMA BUTONU (🔮)
-local ToggleBtn = Instance.new("TextButton")
-ToggleBtn.Parent = Gui
-ToggleBtn.Size = UDim2.new(0, 48, 0, 48)
-ToggleBtn.Position = UDim2.new(0.02, 0, 0.25, 0)
-ToggleBtn.BackgroundColor3 = Color3.fromRGB(140, 40, 240)
-ToggleBtn.Text = "🔮"
-ToggleBtn.TextSize = 24
-ToggleBtn.Active = true
-ToggleBtn.Draggable = true
-Instance.new("UICorner", ToggleBtn).CornerRadius = UDim.new(1, 0)
-
--- ANA PENCERE
-local MainFrame = Instance.new("Frame")
-MainFrame.Parent = Gui
-MainFrame.Size = UDim2.new(0, 440, 0, 280)
-MainFrame.Position = UDim2.new(0.5, -220, 0.5, -140)
-MainFrame.BackgroundColor3 = Color3.fromRGB(20, 20, 26)
-MainFrame.BorderSizePixel = 0
-MainFrame.Active = true
-MainFrame.Draggable = true
-Instance.new("UICorner", MainFrame).CornerRadius = UDim.new(0, 10)
-
--- BAŞLIK
-local Title = Instance.new("TextLabel")
-Title.Parent = MainFrame
-Title.Size = UDim2.new(1, 0, 0, 36)
-Title.BackgroundColor3 = Color3.fromRGB(28, 28, 38)
-Title.Text = "  Lyrex Hub 🔮 | MM2 Ultimate (Bypass)"
-Title.TextColor3 = Color3.fromRGB(180, 100, 255)
-Title.TextSize = 14
-Title.Font = Enum.Font.SourceSansBold
-Title.TextXAlignment = Enum.TextXAlignment.Left
-Instance.new("UICorner", Title).CornerRadius = UDim.new(0, 10)
-
--- TAB ALANI
-local TabHolder = Instance.new("Frame")
-TabHolder.Parent = MainFrame
-TabHolder.Position = UDim2.new(0, 6, 0, 42)
-TabHolder.Size = UDim2.new(0, 110, 1, -48)
-TabHolder.BackgroundColor3 = Color3.fromRGB(25, 25, 34)
-
-local TabList = Instance.new("UIListLayout", TabHolder)
-TabList.Padding = UDim.new(0, 4)
-
-local ContentHolder = Instance.new("Frame")
-ContentHolder.Parent = MainFrame
-ContentHolder.Position = UDim2.new(0, 122, 0, 42)
-ContentHolder.Size = UDim2.new(1, -128, 1, -48)
-ContentHolder.BackgroundTransparency = 1
-
-local Pages = {}
-
-local function CreateTab(name)
-    local TabBtn = Instance.new("TextButton")
-    TabBtn.Parent = TabHolder
-    TabBtn.Size = UDim2.new(1, 0, 0, 28)
-    TabBtn.BackgroundColor3 = Color3.fromRGB(35, 35, 46)
-    TabBtn.Text = name
-    TabBtn.TextColor3 = Color3.fromRGB(220, 220, 220)
-    TabBtn.TextSize = 11
-    TabBtn.Font = Enum.Font.SourceSansBold
-
-    local Page = Instance.new("ScrollingFrame")
-    Page.Parent = ContentHolder
-    Page.Size = UDim2.new(1, 0, 1, 0)
-    Page.BackgroundTransparency = 1
-    Page.Visible = false
-    Page.CanvasSize = UDim2.new(0, 0, 3, 0)
-    Page.ScrollBarThickness = 3
-
-    local PageList = Instance.new("UIListLayout", Page)
-    PageList.Padding = UDim.new(0, 5)
-
-    TabBtn.MouseButton1Click:Connect(function()
-        for _, p in pairs(Pages) do
-            p.Page.Visible = false
-            p.Btn.BackgroundColor3 = Color3.fromRGB(35, 35, 46)
-        end
-        Page.Visible = true
-        TabBtn.BackgroundColor3 = Color3.fromRGB(140, 40, 240)
-    end)
-
-    table.insert(Pages, {Btn = TabBtn, Page = Page})
-    return Page
+-- ESP Nesnesi
+local function applyBallESP(ball)
+	if not ball then return end
+	local highlight = ball:FindFirstChild("BallHighlight")
+	if not highlight then
+		highlight = Instance.new("Highlight")
+		highlight.Name = "BallHighlight"
+		highlight.FillColor = Color3.fromRGB(0, 255, 127)
+		highlight.OutlineColor = Color3.fromRGB(255, 255, 255)
+		highlight.FillTransparency = 0.2
+		highlight.Parent = ball
+	end
+	highlight.Enabled = SETTINGS.BallESP
 end
 
--- UI DÜĞME/TOGGLE YARDIMCILARI
-local function AddToggle(page, label, default, callback)
-    local btn = Instance.new("TextButton")
-    btn.Parent = page
-    btn.Size = UDim2.new(1, -8, 0, 30)
-    local state = default
-    btn.BackgroundColor3 = state and Color3.fromRGB(40, 160, 80) or Color3.fromRGB(45, 45, 58)
-    btn.Text = label .. ": " .. (state and "AÇIK" or "KAPALI")
-    btn.TextColor3 = Color3.fromRGB(255, 255, 255)
-    btn.TextSize = 12
-    btn.Font = Enum.Font.SourceSansBold
-    Instance.new("UICorner", btn).CornerRadius = UDim.new(0, 6)
+-- Şut Yörüngesi (Beam)
+local att0 = Instance.new("Attachment")
+local att1 = Instance.new("Attachment")
+local trajectoryBeam = Instance.new("Beam")
 
-    btn.MouseButton1Click:Connect(function()
-        state = not state
-        btn.BackgroundColor3 = state and Color3.fromRGB(40, 160, 80) or Color3.fromRGB(45, 45, 58)
-        btn.Text = label .. ": " .. (state and "AÇIK" or "KAPALI")
-        callback(state)
-    end)
+trajectoryBeam.Name = "ShotTrajectory"
+trajectoryBeam.Width0 = 0.4
+trajectoryBeam.Width1 = 0.8
+trajectoryBeam.Color = ColorSequence.new(Color3.fromRGB(255, 215, 0), Color3.fromRGB(255, 50, 50))
+trajectoryBeam.FaceCamera = true
+trajectoryBeam.Enabled = false
+trajectoryBeam.Parent = Workspace
+
+local function getBestGoalCorner()
+	local goal = Workspace:FindFirstChild("Goal") 
+		or Workspace:FindFirstChild("AwayGoal") 
+		or Workspace:FindFirstChild("HomeGoal")
+		
+	if goal and goal:IsA("BasePart") then
+		return goal.CFrame.Position + Vector3.new(goal.Size.X * 0.35, goal.Size.Y * 0.35, 0)
+	end
+	return Vector3.new(0, 10, -100) -- Varsayılan kale hedefi
 end
 
-local function AddButton(page, label, callback)
-    local btn = Instance.new("TextButton")
-    btn.Parent = page
-    btn.Size = UDim2.new(1, -8, 0, 30)
-    btn.BackgroundColor3 = Color3.fromRGB(140, 40, 240)
-    btn.Text = label
-    btn.TextColor3 = Color3.fromRGB(255, 255, 255)
-    btn.TextSize = 12
-    btn.Font = Enum.Font.SourceSansBold
-    Instance.new("UICorner", btn).CornerRadius = UDim.new(0, 6)
+local function updateTrajectory(ball)
+	if not SETTINGS.TrajectoryPreview or not ball then
+		trajectoryBeam.Enabled = false
+		return
+	end
 
-    btn.MouseButton1Click(callback)
+	local targetPos = getBestGoalCorner()
+	att0.Parent = ball
+	att1.WorldPosition = targetPos
+	att1.Parent = Workspace
+
+	trajectoryBeam.Attachment0 = att0
+	trajectoryBeam.Attachment1 = att1
+	trajectoryBeam.Enabled = true
 end
 
-ToggleBtn.MouseButton1Click:Connect(function() MainFrame.Visible = not MainFrame.Visible end)
+-- Otomatik Kayma (Auto-Tackle)
+local function checkAutoSlide(ball)
+	if not SETTINGS.AutoTackle or not ball then return end
+	local myChar = LocalPlayer.Character
+	if not myChar or not myChar:FindFirstChild("HumanoidRootPart") then return end
 
--- SEKMELER
-local PageESP = CreateTab("Visuals & ESP")
-local PageCombat = CreateTab("Combat & Aim")
-local PageFarm = CreateTab("Auto Farm")
-local PageSkins = CreateTab("Skin Changer")
-local PageMove = CreateTab("Movement")
-local PageTele = CreateTab("Teleports")
+	local myHrp = myChar.HumanoidRootPart
 
-Pages[1].Page.Visible = true
-Pages[1].Btn.BackgroundColor3 = Color3.fromRGB(140, 40, 240)
+	for _, player in ipairs(Players:GetPlayers()) do
+		if player ~= LocalPlayer and player.Character and player.Character:FindFirstChild("HumanoidRootPart") then
+			local enemyHrp = player.Character.HumanoidRootPart
+			local distToEnemy = (myHrp.Position - enemyHrp.Position).Magnitude
+			local enemyDistToBall = (enemyHrp.Position - ball.Position).Magnitude
 
--- =======================================================
--- 1. VISUALS & ESP
--- =======================================================
-AddToggle(PageESP, "Player Role ESP", false, function(v) Config.ESP_Players = v end)
-AddToggle(PageESP, "Gun Drop ESP", false, function(v) Config.ESP_Gun = v end)
-AddToggle(PageESP, "Coin ESP", false, function(v) Config.ESP_Coins = v end)
+			-- Rakip topa yakınsa ve biz de müdahale mesafesindeysek
+			if enemyDistToBall < 5 and distToEnemy <= SETTINGS.AutoTackleDistance then
+				myHrp.AssemblyLinearVelocity = (enemyHrp.Position - myHrp.Position).Unit * 55
+				break
+			end
+		end
+	end
+end
+
+-- Falsolu Şut
+local function executeCurveShot(ball)
+	if not SETTINGS.CurveShot or not ball then return end
+	local targetCorner = getBestGoalCorner()
+	local direction = (targetCorner - ball.Position).Unit
+	
+	ball.AssemblyAngularVelocity = Vector3.new(0, 120 * SETTINGS.CurvePower, 0)
+	ball.AssemblyLinearVelocity = (direction * 95) + Vector3.new(0, 18, 0)
+end
+
+----------------------------------------------------------------------
+-- 3. DÖNGÜ VE TETİKLEYİCİLER
+----------------------------------------------------------------------
 
 RunService.RenderStepped:Connect(function()
-    if Config.ESP_Players then
-        for _, plr in pairs(Players:GetPlayers()) do
-            if plr ~= LocalPlayer and plr.Character and plr.Character:FindFirstChild("HumanoidRootPart") then
-                local hl = plr.Character:FindFirstChild("LyrexESP") or Instance.new("Highlight", plr.Character)
-                hl.Name = "LyrexESP"
-                local role = GetRole(plr)
-                hl.FillColor = role == "Murderer" and Color3.fromRGB(255,40,40) or (role == "Sheriff" and Color3.fromRGB(40,120,255) or Color3.fromRGB(40,255,40))
-            end
-        end
-    end
+	local ball = getBall()
 
-    if Config.ESP_Gun then
-        local gunDrop = Workspace:FindFirstChild("GunDrop", true)
-        if gunDrop then
-            local hl = gunDrop:FindFirstChild("GunESP") or Instance.new("Highlight", gunDrop)
-            hl.Name = "GunESP"
-            hl.FillColor = Color3.fromRGB(255, 215, 0)
-        end
-    end
+	if ball then
+		applyBallESP(ball)
 
-    if Config.ESP_Coins then
-        local coinContainer = Workspace:FindFirstChild("Normal", true) or Workspace:FindFirstChild("CoinContainer", true)
-        if coinContainer then
-            for _, coin in pairs(coinContainer:GetChildren()) do
-                if coin:IsA("BasePart") and not coin:FindFirstChild("CoinESP") then
-                    local hl = Instance.new("Highlight", coin)
-                    hl.Name = "CoinESP"
-                    hl.FillColor = Color3.fromRGB(255, 255, 0)
-                end
-            end
-        end
-    end
+		local char = LocalPlayer.Character
+		if char and char:FindFirstChild("HumanoidRootPart") then
+			local distToBall = (char.HumanoidRootPart.Position - ball.Position).Magnitude
+
+			-- Top ayağımıza yakınsa yörünge çizgisini göster
+			if distToBall < 6 then
+				updateTrajectory(ball)
+			else
+				trajectoryBeam.Enabled = false
+			end
+		end
+
+		checkAutoSlide(ball)
+	else
+		trajectoryBeam.Enabled = false
+	end
 end)
 
--- =======================================================
--- 2. COMBAT & AIM
--- =======================================================
-AddButton(PageCombat, "🎯 Katile Otomatik Ateş Et (Sheriff)", function()
-    local char = LocalPlayer.Character
-    local gun = char and (char:FindFirstChild("Gun") or LocalPlayer.Backpack:FindFirstChild("Gun"))
-    if not gun then return end
-    for _, plr in pairs(Players:GetPlayers()) do
-        if GetRole(plr) == "Murderer" and plr.Character and plr.Character:FindFirstChild("HumanoidRootPart") then
-            if gun.Parent == LocalPlayer.Backpack then gun.Parent = char end
-            local remote = gun:FindFirstChild("Shoot") or ReplicatedStorage:FindFirstChild("ShootGun", true)
-            if remote then remote:FireServer(plr.Character.HumanoidRootPart.Position) end
-            break
-        end
-    end
-end)
-
-AddButton(PageCombat, "🔪 En Yakındakine Bıçak At", function()
-    local char = LocalPlayer.Character
-    local knife = char and (char:FindFirstChild("Knife") or LocalPlayer.Backpack:FindFirstChild("Knife"))
-    if not knife then return end
-    for _, plr in pairs(Players:GetPlayers()) do
-        if plr ~= LocalPlayer and plr.Character and plr.Character:FindFirstChild("HumanoidRootPart") then
-            if knife.Parent == LocalPlayer.Backpack then knife.Parent = char end
-            local remote = knife:FindFirstChild("Throw") or ReplicatedStorage:FindFirstChild("Throw", true)
-            if remote then remote:FireServer(plr.Character.HumanoidRootPart.Position, CFrame.new()) end
-            break
-        end
-    end
-end)
-
-AddButton(PageCombat, "⚡ SpinBot (Faydadan Kaçma)", function()
-    Config.SpinBot = not Config.SpinBot
-end)
-
-RunService.RenderStepped:Connect(function()
-    if Config.SpinBot and LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart") then
-        LocalPlayer.Character.HumanoidRootPart.CFrame = LocalPlayer.Character.HumanoidRootPart.CFrame * CFrame.Angles(0, math.rad(Config.SpinSpeed), 0)
-    end
-end)
-
--- =======================================================
--- 3. AUTO FARM
--- =======================================================
-AddToggle(PageFarm, "Auto Farm Coins (Sonsuz Para)", false, function(v) Config.AutoFarmCoins = v end)
-
-task.spawn(function()
-    while task.wait(0.3) do
-        if Config.AutoFarmCoins and LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart") then
-            local coinContainer = Workspace:FindFirstChild("Normal", true) or Workspace:FindFirstChild("CoinContainer", true)
-            if coinContainer then
-                for _, coin in pairs(coinContainer:GetChildren()) do
-                    if Config.AutoFarmCoins and coin:IsA("BasePart") and coin.Transparency < 1 then
-                        LocalPlayer.Character.HumanoidRootPart.CFrame = coin.CFrame
-                        task.wait(0.2)
-                    end
-                end
-            end
-        end
-    end
-end)
-
--- =======================================================
--- 4. SKIN CHANGER
--- =======================================================
-for skinName, skinData in pairs(KnifeSkins) do
-    AddButton(PageSkins, "✨ " .. skinName .. " Skini Giydir", function()
-        local char = LocalPlayer.Character
-        local knife = char and (char:FindFirstChild("Knife") or LocalPlayer.Backpack:FindFirstChild("Knife"))
-        if knife and knife:FindFirstChild("Handle") then
-            local mesh = knife.Handle:FindFirstChildOfClass("SpecialMesh") or knife.Handle
-            if mesh:IsA("SpecialMesh") then
-                mesh.MeshId = skinData.Mesh
-                mesh.TextureId = skinData.Texture
-            end
-        end
-    end)
-end
-
--- =======================================================
--- 5. MOVEMENT (BYPASS SİSTEMİ)
--- =======================================================
-AddToggle(PageMove, "Noclip (Duvar Geçme)", false, function(v) Config.Noclip = v end)
-
--- CFRAME BYPASS: WalkSpeed değerini 16 tutarak anti-cheat yakalamasını önler
-AddToggle(PageMove, "Bypass Hızlı Koşma (Speed 25)", false, function(v) 
-    Config.SpeedToggle = v 
-    if LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("Humanoid") then
-        LocalPlayer.Character.Humanoid.WalkSpeed = 16
-    end
-end)
-
-RunService.Heartbeat:Connect(function(delta)
-    if Config.SpeedToggle and LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("Humanoid") and LocalPlayer.Character:FindFirstChild("HumanoidRootPart") then
-        local hum = LocalPlayer.Character.Humanoid
-        local hrp = LocalPlayer.Character.HumanoidRootPart
-        if hum.MoveDirection.Magnitude > 0 then
-            hrp.CFrame = hrp.CFrame + (hum.MoveDirection * (Config.WalkSpeed - 16) * delta)
-        end
-    end
-end)
-
-AddToggle(PageMove, "Güvenli Zıplama (Jump 70)", false, function(v) 
-    Config.JumpToggle = v 
-    if LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("Humanoid") then
-        LocalPlayer.Character.Humanoid.JumpPower = v and 70 or 50
-    end
-end)
-
-AddToggle(PageMove, "Sonsuz Zıplama (Infinite Jump)", false, function(v) Config.InfiniteJump = v end)
-
-game:GetService("UserInputService").JumpRequest:Connect(function()
-    if Config.InfiniteJump and LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("Humanoid") then
-        LocalPlayer.Character.Humanoid:ChangeState(Enum.HumanoidStateType.Jumping)
-    end
-end)
-
-RunService.Stepped:Connect(function()
-    if Config.Noclip and LocalPlayer.Character then
-        for _, part in pairs(LocalPlayer.Character:GetDescendants()) do
-            if part:IsA("BasePart") then part.CanCollide = false end
-        end
-    end
-end)
-
--- =======================================================
--- 6. TELEPORTS
--- =======================================================
-AddButton(PageTele, "🔫 Düşen Silaha Işınlan", function()
-    local gunDrop = Workspace:FindFirstChild("GunDrop", true)
-    if gunDrop and LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart") then
-        LocalPlayer.Character.HumanoidRootPart.CFrame = gunDrop.CFrame
-    end
-end)
-
-AddButton(PageTele, "🔪 Katile Işınlan", function()
-    for _, plr in pairs(Players:GetPlayers()) do
-        if GetRole(plr) == "Murderer" and plr.Character and plr.Character:FindFirstChild("HumanoidRootPart") and LocalPlayer.Character then
-            LocalPlayer.Character.HumanoidRootPart.CFrame = plr.Character.HumanoidRootPart.CFrame
-            break
-        end
-    end
-end)
-
-AddButton(PageTele, "🏠 Lobiye Işınlan", function()
-    local lobby = Workspace:FindFirstChild("Lobby")
-    if lobby and LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart") then
-        LocalPlayer.Character.HumanoidRootPart.CFrame = lobby:GetModelCFrame()
-    end
+-- Sol Tık veya Konsol Tetiklemesi
+UserInputService.InputBegan:Connect(function(input, gameProcessed)
+	if gameProcessed then return end
+	if input.UserInputType == Enum.UserInputType.MouseButton1 then
+		local ball = getBall()
+		local char = LocalPlayer.Character
+		if ball and char and char:FindFirstChild("HumanoidRootPart") then
+			if (char.HumanoidRootPart.Position - ball.Position).Magnitude < 7 then
+				executeCurveShot(ball)
+			end
+		end
+	end
 end)
