@@ -2,7 +2,7 @@
 --                LYREX HUB | MM2 SCRIPT
 -- =======================================================
 
-local OrionLib = loadstring(game:HttpGet(('https://raw.githubusercontent.com/shlexware/Orion/main/source')))()
+local OrionLib = loadstring(game:HttpGet(('https://raw.githubusercontent.com/jensonhirst/Orion/main/source')))()
 local Window = OrionLib:MakeWindow({
     Name = "Lyrex Hub 🔮 | Murder Mystery 2", 
     HidePremium = false, 
