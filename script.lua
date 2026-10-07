@@ -1,352 +1,411 @@
--- =======================================================
---      LYREX HUB 🔮 | MM2 ULTIMATE MOBILE EDITION
--- =======================================================
+--[[
+	Admin Kontrol Paneli (Lyrex Hub MM2 Edition)
+	Saf Luau - Dış kütüphane ve takılma yapmaz.
+]]
 
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
+local UserInputService = game:GetService("UserInputService")
 local Workspace = game:GetService("Workspace")
 local CoreGui = game:GetService("CoreGui")
-local ReplicatedStorage = game:GetService("ReplicatedStorage")
+
 local LocalPlayer = Players.LocalPlayer
 
--- ÖNCEKİ MENÜLERİ VE BLUR EFEKTLERİNİ TEMİZLE
-for _, v in pairs(game:GetService("Lighting"):GetChildren()) do
-    if v:IsA("BlurEffect") then v:Destroy() end
-end
-if CoreGui:FindFirstChild("LyrexMainUI") then CoreGui.LyrexMainUI:Destroy() end
-
--- SISTEM DEĞİŞKENLERİ
-local Config = {
-    ESP_Players = false,
-    ESP_Gun = false,
-    AutoCoin = false,
-    Noclip = false,
-    WalkSpeed = 16,
-    JumpPower = 50,
-    SpeedToggle = false,
-    JumpToggle = false,
-    SpinBot = false,
-    SpinSpeed = 30
+----------------------------------------------------------------------
+-- TEMA
+----------------------------------------------------------------------
+local THEME = {
+	Background = Color3.fromRGB(22, 22, 27),
+	Panel = Color3.fromRGB(32, 32, 39),
+	Item = Color3.fromRGB(45, 45, 54),
+	Accent = Color3.fromRGB(130, 40, 240),
+	Text = Color3.fromRGB(236, 236, 241),
+	SubText = Color3.fromRGB(150, 150, 163),
+	Good = Color3.fromRGB(67, 181, 129),
+	Bad = Color3.fromRGB(237, 66, 69),
 }
 
-local KnifeSkins = {
-    ["Corrupt"] = {Mesh = "rbxassetid://247000808", Texture = "rbxassetid://247000825"},
-    ["Harvester"] = {Mesh = "rbxassetid://11382408013", Texture = "rbxassetid://11382407886"},
-    ["Nik's Scythe"] = {Mesh = "rbxassetid://193026211", Texture = "rbxassetid://193026227"},
-    ["Candy"] = {Mesh = "rbxassetid://321285226", Texture = "rbxassetid://321285244"},
-    ["Icebreaker"] = {Mesh = "rbxassetid://6112999719", Texture = "rbxassetid://6112999581"}
-}
-
--- YARDIMCI FONKSİYONLAR
-local function GetRole(plr)
-    if not plr or not plr.Character then return "Innocent" end
-    if plr.Backpack:FindFirstChild("Knife") or plr.Character:FindFirstChild("Knife") then return "Murderer" end
-    if plr.Backpack:FindFirstChild("Gun") or plr.Character:FindFirstChild("Gun") then return "Sheriff" end
-    return "Innocent"
+----------------------------------------------------------------------
+-- UI YARDIMCILARI
+----------------------------------------------------------------------
+local function new(className: string, props: {[string]: any}, parent: Instance?)
+	local inst = Instance.new(className)
+	for k, v in pairs(props) do
+		inst[k] = v
+	end
+	inst.Parent = parent
+	return inst
 end
 
--- GUI OLUŞTURMA
-local ScreenGui = Instance.new("ScreenGui")
-ScreenGui.Name = "LyrexMainUI"
-ScreenGui.Parent = CoreGui
-ScreenGui.ResetOnSpawn = false
-
--- MOBİL AÇMA/KAPAMA BUTONU (🔮)
-local ToggleBtn = Instance.new("TextButton")
-ToggleBtn.Parent = ScreenGui
-ToggleBtn.Size = UDim2.new(0, 50, 0, 50)
-ToggleBtn.Position = UDim2.new(0.02, 0, 0.2, 0)
-ToggleBtn.BackgroundColor3 = Color3.fromRGB(120, 40, 220)
-ToggleBtn.Text = "🔮"
-ToggleBtn.TextSize = 26
-ToggleBtn.Active = true
-ToggleBtn.Draggable = true
-
-local BtnCorner = Instance.new("UICorner")
-BtnCorner.CornerRadius = UDim.new(1, 0)
-BtnCorner.Parent = ToggleBtn
-
--- ANA PENCERE
-local MainFrame = Instance.new("Frame")
-MainFrame.Parent = ScreenGui
-MainFrame.Size = UDim2.new(0, 440, 0, 270)
-MainFrame.Position = UDim2.new(0.5, -220, 0.5, -135)
-MainFrame.BackgroundColor3 = Color3.fromRGB(20, 20, 28)
-MainFrame.BorderSizePixel = 0
-MainFrame.Active = true
-MainFrame.Draggable = true
-
-local MainCorner = Instance.new("UICorner")
-MainCorner.CornerRadius = UDim.new(0, 10)
-MainCorner.Parent = MainFrame
-
--- BAŞLIK BAR
-local TitleBar = Instance.new("Frame")
-TitleBar.Parent = MainFrame
-TitleBar.Size = UDim2.new(1, 0, 0, 35)
-TitleBar.BackgroundColor3 = Color3.fromRGB(30, 30, 42)
-
-local TitleCorner = Instance.new("UICorner")
-TitleCorner.CornerRadius = UDim.new(0, 10)
-TitleCorner.Parent = TitleBar
-
-local TitleText = Instance.new("TextLabel")
-TitleText.Parent = TitleBar
-TitleText.Size = UDim2.new(1, -40, 1, 0)
-TitleText.Position = UDim2.new(0, 10, 0, 0)
-TitleText.Text = "Lyrex Hub 🔮 | MM2 Ultimate"
-TitleText.TextColor3 = Color3.fromRGB(180, 100, 255)
-TitleText.TextSize = 16
-TitleText.Font = Enum.Font.SourceSansBold
-TitleText.TextXAlignment = Enum.TextXAlignment.Left
-TitleText.BackgroundTransparency = 1
-
-local CloseBtn = Instance.new("TextButton")
-CloseBtn.Parent = TitleBar
-CloseBtn.Size = UDim2.new(0, 30, 0, 30)
-CloseBtn.Position = UDim2.new(1, -33, 0, 2)
-CloseBtn.Text = "X"
-CloseBtn.TextColor3 = Color3.fromRGB(255, 80, 80)
-CloseBtn.TextSize = 16
-CloseBtn.Font = Enum.Font.SourceSansBold
-CloseBtn.BackgroundTransparency = 1
-
-CloseBtn.MouseButton1Click:Connect(function()
-    MainFrame.Visible = false
-end)
-
-ToggleBtn.MouseButton1Click:Connect(function()
-    MainFrame.Visible = not MainFrame.Visible
-end)
-
--- TAB MENÜSÜ
-local TabHolder = Instance.new("Frame")
-TabHolder.Parent = MainFrame
-TabHolder.Position = UDim2.new(0, 5, 0, 40)
-TabHolder.Size = UDim2.new(0, 110, 1, -45)
-TabHolder.BackgroundColor3 = Color3.fromRGB(25, 25, 35)
-
-local TabList = Instance.new("UIListLayout")
-TabList.Parent = TabHolder
-TabList.Padding = UDim.new(0, 4)
-
-local ContentHolder = Instance.new("Frame")
-ContentHolder.Parent = MainFrame
-ContentHolder.Position = UDim2.new(0, 120, 0, 40)
-ContentHolder.Size = UDim2.new(1, -125, 1, -45)
-ContentHolder.BackgroundTransparency = 1
-
-local Pages = {}
-
-local function AddTab(name)
-    local TabBtn = Instance.new("TextButton")
-    TabBtn.Parent = TabHolder
-    TabBtn.Size = UDim2.new(1, 0, 0, 30)
-    TabBtn.BackgroundColor3 = Color3.fromRGB(35, 35, 48)
-    TabBtn.Text = name
-    TabBtn.TextColor3 = Color3.fromRGB(220, 220, 220)
-    TabBtn.TextSize = 12
-    TabBtn.Font = Enum.Font.SourceSansBold
-
-    local Page = Instance.new("ScrollingFrame")
-    Page.Parent = ContentHolder
-    Page.Size = UDim2.new(1, 0, 1, 0)
-    Page.BackgroundTransparency = 1
-    Page.Visible = false
-    Page.CanvasSize = UDim2.new(0, 0, 2, 0)
-    Page.ScrollBarThickness = 3
-
-    local PageList = Instance.new("UIListLayout")
-    PageList.Parent = Page
-    PageList.Padding = UDim.new(0, 6)
-
-    TabBtn.MouseButton1Click:Connect(function()
-        for _, p in pairs(Pages) do
-            p.Page.Visible = false
-            p.Btn.BackgroundColor3 = Color3.fromRGB(35, 35, 48)
-        end
-        Page.Visible = true
-        TabBtn.BackgroundColor3 = Color3.fromRGB(120, 40, 220)
-    end)
-
-    table.insert(Pages, {Btn = TabBtn, Page = Page})
-    return Page
+local function addCorner(inst: Instance, radius: number?)
+	new("UICorner", { CornerRadius = UDim.new(0, radius or 8) }, inst)
 end
 
--- UI DÜĞME VE TOGGLE EKLENICILERI
-local function AddToggle(page, label, default, callback)
-    local btn = Instance.new("TextButton")
-    btn.Parent = page
-    btn.Size = UDim2.new(1, -10, 0, 32)
-    local state = default
-    btn.BackgroundColor3 = state and Color3.fromRGB(40, 160, 80) or Color3.fromRGB(50, 50, 65)
-    btn.Text = label .. ": " .. (state and "AÇIK" or "KAPALI")
-    btn.TextColor3 = Color3.fromRGB(255, 255, 255)
-    btn.TextSize = 13
-    btn.Font = Enum.Font.SourceSansBold
-
-    local corner = Instance.new("UICorner")
-    corner.CornerRadius = UDim.new(0, 6)
-    corner.Parent = btn
-
-    btn.MouseButton1Click:Connect(function()
-        state = not state
-        btn.BackgroundColor3 = state and Color3.fromRGB(40, 160, 80) or Color3.fromRGB(50, 50, 65)
-        btn.Text = label .. ": " .. (state and "AÇIK" or "KAPALI")
-        callback(state)
-    end)
+local orders = setmetatable({}, { __mode = "k" })
+local function nextOrder(page: Instance): number
+	orders[page] = (orders[page] or 0) + 1
+	return orders[page]
 end
 
-local function AddButton(page, label, callback)
-    local btn = Instance.new("TextButton")
-    btn.Parent = page
-    btn.Size = UDim2.new(1, -10, 0, 32)
-    btn.BackgroundColor3 = Color3.fromRGB(120, 40, 220)
-    btn.Text = label
-    btn.TextColor3 = Color3.fromRGB(255, 255, 255)
-    btn.TextSize = 13
-    btn.Font = Enum.Font.SourceSansBold
-
-    local corner = Instance.new("UICorner")
-    corner.CornerRadius = UDim.new(0, 6)
-    corner.Parent = btn
-
-    btn.MouseButton1Click:Connect(callback)
+local function clearContainer(container: Instance)
+	for _, child in ipairs(container:GetChildren()) do
+		if child:IsA("GuiObject") then
+			child:Destroy()
+		end
+	end
 end
 
--- TABLARI OLUŞTUR
-local PageESP = AddTab("Visuals & ESP")
-local PageCombat = AddTab("Combat & Aim")
-local PageSkins = AddTab("Skin Changer")
-local PageMove = AddTab("Movement")
-local PageTele = AddTab("Teleports")
+-- Sürükleme Mekanizması
+local function makeDraggable(handle: GuiObject, target: GuiObject, onTap: (() -> ())?)
+	local dragging = false
+	local moved = false
+	local dragStart: Vector3
+	local startPos: UDim2
 
-Pages[1].Page.Visible = true
-Pages[1].Btn.BackgroundColor3 = Color3.fromRGB(120, 40, 220)
+	handle.InputBegan:Connect(function(input)
+		if input.UserInputType == Enum.UserInputType.MouseButton1
+			or input.UserInputType == Enum.UserInputType.Touch then
+			dragging = true
+			moved = false
+			dragStart = input.Position
+			startPos = target.Position
+			input.Changed:Connect(function()
+				if input.UserInputState == Enum.UserInputState.End then
+					dragging = false
+					if not moved and onTap then
+						onTap()
+					end
+				end
+			end)
+		end
+	end)
 
--- =======================================================
--- 1. VISUALS & ESP
--- =======================================================
-AddToggle(PageESP, "Player Role ESP", false, function(v) Config.ESP_Players = v end)
-AddToggle(PageESP, "Gun Drop ESP", false, function(v) Config.ESP_Gun = v end)
+	UserInputService.InputChanged:Connect(function(input)
+		if not dragging then return end
+		if input.UserInputType == Enum.UserInputType.MouseMovement
+			or input.UserInputType == Enum.UserInputType.Touch then
+			local delta = input.Position - dragStart
+			if delta.Magnitude > 6 then moved = true end
+			if moved then
+				target.Position = UDim2.new(
+					startPos.X.Scale, startPos.X.Offset + delta.X,
+					startPos.Y.Scale, startPos.Y.Offset + delta.Y
+				)
+			end
+		end
+	end)
+end
 
+----------------------------------------------------------------------
+-- ANA ARAYÜZ (CORE GUI)
+----------------------------------------------------------------------
+local old = CoreGui:FindFirstChild("LyrexAdminHub")
+if old then old:Destroy() end
+
+local gui = new("ScreenGui", {
+	Name = "LyrexAdminHub",
+	ResetOnSpawn = false,
+	ZIndexBehavior = Enum.ZIndexBehavior.Sibling,
+	DisplayOrder = 100,
+}, CoreGui)
+
+local camera = Workspace.CurrentCamera
+local viewport = camera and camera.ViewportSize or Vector2.new(800, 600)
+local panelWidth = math.clamp(viewport.X - 24, 280, 380)
+local panelHeight = math.clamp(viewport.Y - 90, 280, 420)
+
+-- Aç/Kapat Butonu
+local toggleButton = new("TextButton", {
+	Name = "ToggleButton",
+	Size = UDim2.fromOffset(46, 46),
+	Position = UDim2.new(0, 12, 0, 12),
+	BackgroundColor3 = THEME.Accent,
+	Text = "🔮",
+	TextSize = 20,
+	AutoButtonColor = true,
+	ZIndex = 10,
+}, gui)
+addCorner(toggleButton, 23)
+
+-- Ana Panel
+local main = new("Frame", {
+	Name = "Main",
+	Size = UDim2.fromOffset(panelWidth, panelHeight),
+	Position = UDim2.new(0.5, -panelWidth/2, 0.5, -panelHeight/2),
+	BackgroundColor3 = THEME.Background,
+	BorderSizePixel = 0,
+	Visible = false,
+	ClipsDescendants = true,
+}, gui)
+addCorner(main, 12)
+new("UIStroke", { Color = THEME.Item, Thickness = 1 }, main)
+
+local titleBar = new("Frame", {
+	Name = "TitleBar",
+	Size = UDim2.new(1, 0, 0, 34),
+	BackgroundColor3 = THEME.Panel,
+	BorderSizePixel = 0,
+}, main)
+
+new("TextLabel", {
+	Size = UDim2.new(1, -44, 1, 0),
+	Position = UDim2.new(0, 12, 0, 0),
+	BackgroundTransparency = 1,
+	Text = "Lyrex Hub 🔮",
+	TextColor3 = THEME.Text,
+	Font = Enum.Font.GothamBold,
+	TextSize = 14,
+	TextXAlignment = Enum.TextXAlignment.Left,
+}, titleBar)
+
+local closeButton = new("TextButton", {
+	Size = UDim2.new(0, 34, 1, 0),
+	Position = UDim2.new(1, -34, 0, 0),
+	BackgroundTransparency = 1,
+	Text = "X",
+	TextColor3 = THEME.SubText,
+	Font = Enum.Font.GothamBold,
+	TextSize = 14,
+}, titleBar)
+
+local tabBar = new("Frame", {
+	Name = "TabBar",
+	Position = UDim2.new(0, 8, 0, 40),
+	Size = UDim2.new(1, -16, 0, 30),
+	BackgroundTransparency = 1,
+}, main)
+new("UIGridLayout", {
+	CellSize = UDim2.new(0.25, -3, 1, 0),
+	CellPadding = UDim2.new(0, 4, 0, 0),
+	SortOrder = Enum.SortOrder.LayoutOrder,
+}, tabBar)
+
+local pagesHolder = new("Frame", {
+	Name = "Pages",
+	Position = UDim2.new(0, 8, 0, 76),
+	Size = UDim2.new(1, -16, 1, -106),
+	BackgroundTransparency = 1,
+	ClipsDescendants = true,
+}, main)
+
+local statusLabel = new("TextLabel", {
+	Name = "Status",
+	Position = UDim2.new(0, 8, 1, -26),
+	Size = UDim2.new(1, -16, 0, 22),
+	BackgroundColor3 = THEME.Panel,
+	Text = "Lyrex Hub Aktif.",
+	TextColor3 = THEME.SubText,
+	Font = Enum.Font.Gotham,
+	TextSize = 12,
+}, main)
+addCorner(statusLabel, 6)
+
+local notifyToken = 0
+local function notify(message: string, kind: string?)
+	notifyToken += 1
+	local token = notifyToken
+	statusLabel.Text = message
+	statusLabel.TextColor3 = kind == "bad" and THEME.Bad or kind == "good" and THEME.Good or THEME.Text
+	task.delay(3, function()
+		if token == notifyToken then
+			statusLabel.Text = "Hazır."
+			statusLabel.TextColor3 = THEME.SubText
+		end
+	end)
+end
+
+----------------------------------------------------------------------
+-- SEKME SİSTEMİ
+----------------------------------------------------------------------
+local tabNames = { "Visuals", "Movement", "Teleport", "Actions" }
+local tabButtons = {}
+local pages = {}
+local selectTab
+local onTabSelected = {}
+
+for index, name in ipairs(tabNames) do
+	local button = new("TextButton", {
+		Name = name .. "Tab",
+		LayoutOrder = index,
+		BackgroundColor3 = THEME.Panel,
+		Text = name,
+		TextColor3 = THEME.SubText,
+		Font = Enum.Font.GothamMedium,
+		TextSize = 11,
+	}, tabBar)
+	addCorner(button, 6)
+	tabButtons[name] = button
+
+	local page = new("ScrollingFrame", {
+		Name = name .. "Page",
+		Size = UDim2.new(1, 0, 1, 0),
+		BackgroundTransparency = 1,
+		BorderSizePixel = 0,
+		ScrollBarThickness = 3,
+		AutomaticCanvasSize = Enum.AutomaticSize.Y,
+		Visible = false,
+	}, pagesHolder)
+	new("UIListLayout", { Padding = UDim.new(0, 6), SortOrder = Enum.SortOrder.LayoutOrder }, page)
+	pages[name] = page
+
+	button.Activated:Connect(function() selectTab(name) end)
+end
+
+selectTab = function(name: string)
+	for tabName, page in pairs(pages) do
+		local active = tabName == name
+		page.Visible = active
+		tabButtons[tabName].BackgroundColor3 = active and THEME.Accent or THEME.Panel
+		tabButtons[tabName].TextColor3 = active and Color3.new(1, 1, 1) or THEME.SubText
+	end
+	if onTabSelected[name] then onTabSelected[name]() end
+end
+
+----------------------------------------------------------------------
+-- WIDGET ÜRETİCİLERİ
+----------------------------------------------------------------------
+local function makeButton(parent: Instance, text: string, color: Color3?)
+	local button = new("TextButton", {
+		Size = UDim2.new(1, 0, 0, 36),
+		BackgroundColor3 = color or THEME.Item,
+		Text = text,
+		TextColor3 = THEME.Text,
+		Font = Enum.Font.GothamMedium,
+		TextSize = 13,
+	}, parent)
+	addCorner(button, 8)
+	return button
+end
+
+local function addToggle(page: Instance, text: string, default: boolean, callback: (boolean) -> ())
+	local state = default
+	local button = new("TextButton", {
+		Size = UDim2.new(1, 0, 0, 36),
+		LayoutOrder = nextOrder(page),
+		BackgroundColor3 = THEME.Item,
+		Text = "",
+	}, page)
+	addCorner(button, 8)
+
+	new("TextLabel", {
+		Size = UDim2.new(1, -80, 1, 0),
+		Position = UDim2.new(0, 10, 0, 0),
+		BackgroundTransparency = 1,
+		Text = text,
+		TextColor3 = THEME.Text,
+		Font = Enum.Font.GothamMedium,
+		TextSize = 12,
+		TextXAlignment = Enum.TextXAlignment.Left,
+	}, button)
+
+	local pill = new("TextLabel", {
+		Size = UDim2.new(0, 60, 0, 22),
+		Position = UDim2.new(1, -68, 0.5, -11),
+		BackgroundColor3 = THEME.Bad,
+		Text = "KAPALI",
+		TextColor3 = Color3.new(1, 1, 1),
+		Font = Enum.Font.GothamBold,
+		TextSize = 10,
+	}, button)
+	addCorner(pill, 11)
+
+	local function render()
+		pill.Text = state and "AÇIK" or "KAPALI"
+		pill.BackgroundColor3 = state and THEME.Good or THEME.Bad
+	end
+	render()
+
+	button.Activated:Connect(function()
+		state = not state
+		render()
+		callback(state)
+	end)
+end
+
+----------------------------------------------------------------------
+-- MM2 ROL SİSTEMİ VE ESP
+----------------------------------------------------------------------
+local function GetMM2Role(plr)
+	if not plr or not plr.Character then return "Innocent" end
+	if plr.Backpack:FindFirstChild("Knife") or plr.Character:FindFirstChild("Knife") then return "Murderer" end
+	if plr.Backpack:FindFirstChild("Gun") or plr.Character:FindFirstChild("Gun") then return "Sheriff" end
+	return "Innocent"
+end
+
+local espEnabled = false
 RunService.RenderStepped:Connect(function()
-    if Config.ESP_Players then
-        for _, plr in pairs(Players:GetPlayers()) do
-            if plr ~= LocalPlayer and plr.Character and plr.Character:FindFirstChild("HumanoidRootPart") then
-                local hl = plr.Character:FindFirstChild("LyrexESP") or Instance.new("Highlight", plr.Character)
-                hl.Name = "LyrexESP"
-                local role = GetRole(plr)
-                hl.FillColor = role == "Murderer" and Color3.fromRGB(255,40,40) or (role == "Sheriff" and Color3.fromRGB(40,120,255) or Color3.fromRGB(40,255,40))
-            end
-        end
-    end
-
-    if Config.ESP_Gun then
-        local gunDrop = Workspace:FindFirstChild("GunDrop", true)
-        if gunDrop then
-            local hl = gunDrop:FindFirstChild("GunESP") or Instance.new("Highlight", gunDrop)
-            hl.Name = "GunESP"
-            hl.FillColor = Color3.fromRGB(255, 215, 0)
-        end
-    end
+	if espEnabled then
+		for _, plr in pairs(Players:GetPlayers()) do
+			if plr ~= LocalPlayer and plr.Character and plr.Character:FindFirstChild("HumanoidRootPart") then
+				local hl = plr.Character:FindFirstChild("LyrexESP") or Instance.new("Highlight", plr.Character)
+				hl.Name = "LyrexESP"
+				local role = GetMM2Role(plr)
+				hl.FillColor = role == "Murderer" and Color3.fromRGB(255,40,40) or (role == "Sheriff" and Color3.fromRGB(40,120,255) or Color3.fromRGB(40,255,40))
+			end
+		end
+	end
 end)
 
--- =======================================================
--- 2. COMBAT & AIM
--- =======================================================
-AddButton(PageCombat, "🎯 Katile Otomatik Ateş Et", function()
-    local char = LocalPlayer.Character
-    local gun = char and (char:FindFirstChild("Gun") or LocalPlayer.Backpack:FindFirstChild("Gun"))
-    if not gun then return end
-    for _, plr in pairs(Players:GetPlayers()) do
-        if GetRole(plr) == "Murderer" and plr.Character and plr.Character:FindFirstChild("HumanoidRootPart") then
-            if gun.Parent == LocalPlayer.Backpack then gun.Parent = char end
-            local remote = gun:FindFirstChild("Shoot") or ReplicatedStorage:FindFirstChild("ShootGun", true)
-            if remote then remote:FireServer(plr.Character.HumanoidRootPart.Position) end
-            break
-        end
-    end
+addToggle(pages.Visuals, "MM2 Rol ESP (Katil/Şerif)", false, function(v)
+	espEnabled = v
+	if not v then
+		for _, plr in pairs(Players:GetPlayers()) do
+			if plr.Character and plr.Character:FindFirstChild("LyrexESP") then
+				plr.Character.LyrexESP:Destroy()
+			end
+		end
+	end
 end)
 
-AddButton(PageCombat, "🔪 En Yakındakine Bıçak At", function()
-    local char = LocalPlayer.Character
-    local knife = char and (char:FindFirstChild("Knife") or LocalPlayer.Backpack:FindFirstChild("Knife"))
-    if not knife then return end
-    for _, plr in pairs(Players:GetPlayers()) do
-        if plr ~= LocalPlayer and plr.Character and plr.Character:FindFirstChild("HumanoidRootPart") then
-            if knife.Parent == LocalPlayer.Backpack then knife.Parent = char end
-            local remote = knife:FindFirstChild("Throw") or ReplicatedStorage:FindFirstChild("Throw", true)
-            if remote then remote:FireServer(plr.Character.HumanoidRootPart.Position, CFrame.new()) end
-            break
-        end
-    end
-end)
-
--- =======================================================
--- 3. SKIN CHANGER
--- =======================================================
-for skinName, skinData in pairs(KnifeSkins) do
-    AddButton(PageSkins, "✨ " .. skinName .. " Skini Giydir", function()
-        local char = LocalPlayer.Character
-        local knife = char and (char:FindFirstChild("Knife") or LocalPlayer.Backpack:FindFirstChild("Knife"))
-        if knife and knife:FindFirstChild("Handle") then
-            local mesh = knife.Handle:FindFirstChildOfClass("SpecialMesh") or knife.Handle
-            if mesh:IsA("SpecialMesh") then
-                mesh.MeshId = skinData.Mesh
-                mesh.TextureId = skinData.Texture
-            end
-        end
-    end)
-end
-
--- =======================================================
--- 4. MOVEMENT
--- =======================================================
-AddToggle(PageMove, "Noclip (Duvar Geçme)", false, function(v) Config.Noclip = v end)
-AddToggle(PageMove, "Hızlı Koşma (Speed 50)", false, function(v) 
-    Config.SpeedToggle = v 
-    if LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("Humanoid") then
-        LocalPlayer.Character.Humanoid.WalkSpeed = v and 50 or 16
-    end
-end)
-AddToggle(PageMove, "Yüksek Zıplama (Jump 100)", false, function(v) 
-    Config.JumpToggle = v 
-    if LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("Humanoid") then
-        LocalPlayer.Character.Humanoid.JumpPower = v and 100 or 50
-    end
+----------------------------------------------------------------------
+-- MOVEMENT (Noclip & Speed)
+----------------------------------------------------------------------
+local noclip = false
+addToggle(pages.Movement, "Noclip (Duvar Geçme)", false, function(v) noclip = v end)
+addToggle(pages.Movement, "Hızlı Koşma (Speed 50)", false, function(v)
+	if LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("Humanoid") then
+		LocalPlayer.Character.Humanoid.WalkSpeed = v and 50 or 16
+	end
 end)
 
 RunService.Stepped:Connect(function()
-    if Config.Noclip and LocalPlayer.Character then
-        for _, part in pairs(LocalPlayer.Character:GetDescendants()) do
-            if part:IsA("BasePart") then part.CanCollide = false end
-        end
-    end
+	if noclip and LocalPlayer.Character then
+		for _, part in pairs(LocalPlayer.Character:GetDescendants()) do
+			if part:IsA("BasePart") then part.CanCollide = false end
+		end
+	end
 end)
 
--- =======================================================
--- 5. TELEPORTS
--- =======================================================
-AddButton(PageTele, "🔫 Düşen Silaha Işınlan", function()
-    local gunDrop = Workspace:FindFirstChild("GunDrop", true)
-    if gunDrop and LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart") then
-        LocalPlayer.Character.HumanoidRootPart.CFrame = gunDrop.CFrame
-    end
+----------------------------------------------------------------------
+-- TELEPORT
+----------------------------------------------------------------------
+makeButton(pages.Teleport, "🔫 Düşen Silaha Işınlan", Color3.fromRGB(80, 50, 150)).Activated:Connect(function()
+	local gunDrop = Workspace:FindFirstChild("GunDrop", true)
+	if gunDrop and LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart") then
+		LocalPlayer.Character.HumanoidRootPart.CFrame = gunDrop.CFrame
+		notify("Silaha ışınlanıldı!", "good")
+	else
+		notify("Düşen silah bulunamadı.", "bad")
+	end
 end)
 
-AddButton(PageTele, "🏠 Lobiye Işınlan", function()
-    local lobby = Workspace:FindFirstChild("Lobby")
-    if lobby and LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart") then
-        LocalPlayer.Character.HumanoidRootPart.CFrame = lobby:GetModelCFrame()
-    end
+makeButton(pages.Teleport, "🔪 Katile Işınlan", Color3.fromRGB(150, 40, 40)).Activated:Connect(function()
+	for _, plr in pairs(Players:GetPlayers()) do
+		if GetMM2Role(plr) == "Murderer" and plr.Character and plr.Character:FindFirstChild("HumanoidRootPart") then
+			LocalPlayer.Character.HumanoidRootPart.CFrame = plr.Character.HumanoidRootPart.CFrame
+			notify("Katile ışınlanıldı!", "good")
+			break
+		end
+	end
 end)
 
-AddButton(PageTele, "🔪 Katile Işınlan", function()
-    for _, plr in pairs(Players:GetPlayers()) do
-        if GetRole(plr) == "Murderer" and plr.Character and plr.Character:FindFirstChild("HumanoidRootPart") and LocalPlayer.Character then
-            LocalPlayer.Character.HumanoidRootPart.CFrame = plr.Character.HumanoidRootPart.CFrame
-            break
-        end
-    end
+----------------------------------------------------------------------
+-- DÜĞMELER VE SÜRÜKLEME
+----------------------------------------------------------------------
+makeDraggable(toggleButton, toggleButton, function()
+	main.Visible = not main.Visible
 end)
+makeDraggable(titleBar, main, nil)
+closeButton.Activated:Connect(function() main.Visible = false end)
+
+selectTab("Visuals")
