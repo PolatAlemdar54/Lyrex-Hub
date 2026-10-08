@@ -1,548 +1,502 @@
 --[[
-    MM2 Ultimate Script | Delta & Diğer Executor Uyumlu
-    GitHub'a yükledikten sonra loadstring ile çalıştırın:
-    loadstring(game:HttpGet("https://raw.githubusercontent.com/KULLANICI_ADINIZ/REPO_ADINIZ/main/MM2_Script.lua"))()
+    MM2 Ultimate Script v3 | Delta, Codex, Wave, Solara Uyumlu
+    Kullanım:
+    loadstring(game:HttpGet("https://raw.githubusercontent.com/KULLANICI/REPO/main/MM2.lua"))()
     
-    Özellikler: ESP, Silent Aim (Gun & Knife), Fling, Auto Coin Farm,
-    WalkSpeed, Bunny Hop, SpinBot, Teleport, Anti-AFK
+    Yeni: Ateş Butonu (Silah Silent Aim) + Auto Kill (Katil)
 ]]
 
 -- ============================================================
--- HİZMETLER VE DEĞİŞKENLER
+-- SERVİSLER
 -- ============================================================
-local Players = game:GetService("Players")
-local RunService = game:GetService("RunService")
-local TweenService = game:GetService("TweenService")
-local UserInputService = game:GetService("UserInputService")
-local LocalPlayer = Players.LocalPlayer
-local Camera = workspace.CurrentCamera
+local Players           = game:GetService("Players")
+local RunService        = game:GetService("RunService")
+local TweenService      = game:GetService("TweenService")
+local UserInputService  = game:GetService("UserInputService")
+local VirtualUser       = game:GetService("VirtualUser")
+local LocalPlayer       = Players.LocalPlayer
+local Camera            = workspace.CurrentCamera
 
--- Yapılandırma
+-- ============================================================
+-- AYARLAR
+-- ============================================================
 local Config = {
     ESP = {
         Enabled = true,
-        ShowMurderer = true,
-        ShowSheriff = true,
-        ShowInnocent = true,
         ShowGunDrop = true,
         ShowTracers = true,
-        MaxDistance = 500
+        MaxDistance = 500,
+        RefreshRate = 0.4,
     },
     SilentAim = {
         GunEnabled = false,
         KnifeEnabled = false,
-        FOV = 120,
-        Smoothness = 0.15
+        AutoKill = false,
+        AutoKillRange = 40,
+        AutoKillFOV = 140,
+        FOV = 140,
+        Headshot = true,
     },
     Movement = {
         WalkSpeed = 16,
         BunnyHop = false,
         SpinBot = false,
-        SpinSpeed = 5
+        SpinSpeed = 400,
     },
     Farm = {
         AutoCoin = false,
-        FarmSpeed = 25,
-        StopWhenFull = true
+        FarmSpeed = 30,
+        MaxCoins = 50,
+        MaxDistance = 300,
     },
     Misc = {
         AntiAFK = true,
-        FlingTarget = nil
+        FlingCooldown = 0,
     }
 }
 
 -- ============================================================
--- HAFIZA YÖNETİMİ (Memory Leak Önleme)
+-- HAFIZA
 -- ============================================================
-local ESPObjects = {}      -- Oyuncu ESP nesneleri
-local TracerObjects = {}   -- Tracer çizgileri
-local GunDropESP = nil     -- Düşen silah ESP nesnesi
-local Connections = {}     -- Bağlantılar
-local Threads = {}         -- Aktif thread'ler
-
--- Temizleme fonksiyonu (Memory Leak önleme)
-local function CleanupAll()
-    for _, obj in pairs(ESPObjects) do
-        if obj.Highlight then obj.Highlight:Destroy() end
-        if obj.Billboard then obj.Billboard:Destroy() end
-    end
-    ESPObjects = {}
-    
-    for _, tracer in pairs(TracerObjects) do
-        if tracer then tracer:Destroy() end
-    end
-    TracerObjects = {}
-    
-    if GunDropESP then
-        if GunDropESP.Highlight then GunDropESP.Highlight:Destroy() end
-        if GunDropESP.Billboard then GunDropESP.Billboard:Destroy() end
-        GunDropESP = nil
-    end
-    
-    for _, conn in pairs(Connections) do
-        if conn and conn.Disconnect then conn:Disconnect() end
-    end
-    Connections = {}
-    
-    for _, thread in pairs(Threads) do
-        if thread and thread.Cancel then thread:Cancel() end
-    end
-    Threads = {}
-end
+local ESPObjects    = {}
+local Tracers       = {}
+local GunDropESP    = nil
+local Connections   = {}
+local Threads       = {}
+local SilentAimTarget = nil
+local FireButton    = nil
 
 -- ============================================================
--- YARDIMCI FONKSİYONLAR
+-- YARDIMCILAR
 -- ============================================================
-
--- Oyuncu rolünü belirleme (MM2'ye özel)
-local function GetPlayerRole(player)
+local function GetRole(player)
     if not player or not player.Character then return "Innocent" end
-    
-    local backpack = player:FindFirstChild("Backpack")
-    local character = player.Character
-    
-    -- Katil kontrolü
-    if backpack and backpack:FindFirstChild("Knife") then
-        return "Murderer"
-    end
-    if character and character:FindFirstChild("Knife") then
-        return "Murderer"
-    end
-    
-    -- Şerif kontrolü
-    if backpack and backpack:FindFirstChild("Gun") then
-        return "Sheriff"
-    end
-    if character and character:FindFirstChild("Gun") then
-        return "Sheriff"
-    end
-    
+    local bp = player:FindFirstChild("Backpack")
+    local ch = player.Character
+    if (bp and bp:FindFirstChild("Knife")) or ch:FindFirstChild("Knife") then return "Murderer" end
+    if (bp and bp:FindFirstChild("Gun")) or ch:FindFirstChild("Gun") then return "Sheriff" end
     return "Innocent"
 end
 
--- Rol rengini alma
-local function GetRoleColor(role)
-    if role == "Murderer" then
-        return Color3.fromRGB(255, 0, 0)      -- Kırmızı
-    elseif role == "Sheriff" then
-        return Color3.fromRGB(0, 100, 255)    -- Mavi
-    else
-        return Color3.fromRGB(0, 255, 0)      -- Yeşil
-    end
+local function RoleColor(role)
+    if role == "Murderer" then return Color3.fromRGB(255, 40, 40)
+    elseif role == "Sheriff" then return Color3.fromRGB(40, 140, 255)
+    else return Color3.fromRGB(40, 255, 90) end
 end
 
--- Mesafe hesaplama
-local function GetDistance(player)
+local function Distance(player)
     if not player or not player.Character then return math.huge end
-    local root = player.Character:FindFirstChild("HumanoidRootPart")
-    if not root then return math.huge end
-    return (root.Position - Camera.CFrame.Position).Magnitude
+    local r = player.Character:FindFirstChild("HumanoidRootPart")
+    if not r then return math.huge end
+    return (r.Position - Camera.CFrame.Position).Magnitude
 end
 
--- İnsansı gecikme (Anti-Cheat Bypass)
 local function HumanDelay(min, max)
-    task.wait(math.random(min * 100, max * 100) / 100)
+    task.wait(math.random(min * 1000, max * 1000) / 1000)
+end
+
+local function IsInFOV(targetPos, fovAngle)
+    local cam = Camera.CFrame
+    local toTarget = (targetPos - cam.Position)
+    if toTarget.Magnitude < 0.1 then return true end
+    local dot = cam.LookVector:Dot(toTarget.Unit)
+    local angle = math.deg(math.acos(math.clamp(dot, -1, 1)))
+    return angle <= (fovAngle / 2)
+end
+
+-- Hedefi bul (görüş açısında, canlı, mesafe içinde)
+local function GetTargetPlayer(roleFilter, fovAngle, maxDist)
+    fovAngle = fovAngle or Config.SilentAim.FOV
+    maxDist = maxDist or Config.ESP.MaxDistance
+    local best, bestDist = nil, math.huge
+    for _, plr in ipairs(Players:GetPlayers()) do
+        if plr == LocalPlayer or not plr.Character then continue end
+        local hum = plr.Character:FindFirstChildOfClass("Humanoid")
+        if not hum or hum.Health <= 0 then continue end
+        local head = plr.Character:FindFirstChild("Head")
+        local root = plr.Character:FindFirstChild("HumanoidRootPart")
+        if not head or not root then continue end
+        if roleFilter and GetRole(plr) ~= roleFilter then continue end
+        if not IsInFOV(head.Position, fovAngle) then continue end
+        local d = (root.Position - Camera.CFrame.Position).Magnitude
+        if d < bestDist and d <= maxDist then bestDist = d; best = plr end
+    end
+    return best
+end
+
+local function GetTargetHitPos()
+    local t = SilentAimTarget
+    if not t or not t.Character then return nil end
+    local part = t.Character:FindFirstChild(Config.SilentAim.Headshot and "Head" or "HumanoidRootPart")
+    return part and part.Position or nil
+end
+
+local function GetLocalGun()
+    local ch = LocalPlayer.Character
+    if not ch then return nil end
+    local tool = ch:FindFirstChild("Gun")
+    if tool then return tool end
+    local bp = LocalPlayer:FindFirstChild("Backpack")
+    if bp then return bp:FindFirstChild("Gun") end
+    return nil
+end
+
+local function GetLocalKnife()
+    local ch = LocalPlayer.Character
+    if not ch then return nil end
+    local tool = ch:FindFirstChild("Knife")
+    if tool then return tool end
+    local bp = LocalPlayer:FindFirstChild("Backpack")
+    if bp then return bp:FindFirstChild("Knife") end
+    return nil
 end
 
 -- ============================================================
--- ESP SİSTEMİ
+-- SİLENT AİM (Metatable Hook)
 -- ============================================================
-local function CreateESP(player)
-    if not player or not player.Character then return end
-    if player == LocalPlayer then return end
-    
-    local character = player.Character
-    local humanoidRootPart = character:FindFirstChild("HumanoidRootPart")
-    if not humanoidRootPart then return end
-    
-    -- Zaten varsa güncelle
-    if ESPObjects[player] then
-        local esp = ESPObjects[player]
-        if esp.Highlight and esp.Highlight.Parent then
-            return
+local function SetupSilentAim()
+    local ok = pcall(function()
+        local mt = getrawmetatable(game)
+        if not mt then return end
+        local oldNamecall = mt.__namecall
+        setreadonly(mt, false)
+        mt.__namecall = newcclosure(function(self, ...)
+            local method = getnamecallmethod()
+            if method == "FireServer" and self and self.Name == "Gun"
+               and Config.SilentAim.GunEnabled then
+                local args = {...}
+                local pos = GetTargetHitPos()
+                if pos then
+                    for i = 1, #args do
+                        if typeof(args[i]) == "Vector3" then args[i] = pos end
+                    end
+                end
+                return oldNamecall(self, table.unpack(args))
+            end
+            return oldNamecall(self, ...)
+        end)
+        setreadonly(mt, true)
+    end)
+    if not ok then warn("[MM2] Silent Aim hook başarısız (executor desteklemiyor).") end
+end
+
+-- ============================================================
+-- FLING
+-- ============================================================
+local function FlingPlayer(target)
+    if not target or target == LocalPlayer or not target.Character then return end
+    if tick() - Config.Misc.FlingCooldown < 2 then return end
+    Config.Misc.FlingCooldown = tick()
+
+    local myChar = LocalPlayer.Character
+    local myHRP  = myChar and myChar:FindFirstChild("HumanoidRootPart")
+    local tHRP   = target.Character:FindFirstChild("HumanoidRootPart")
+    local tHum   = target.Character:FindFirstChildOfClass("Humanoid")
+    if not myHRP or not tHRP or not tHum or tHum.Health <= 0 then return end
+
+    local safePos = myHRP.CFrame
+    HumanDelay(0.12, 0.25)
+
+    pcall(function() myHRP.CFrame = tHRP.CFrame * CFrame.new(0, 2, 0) end)
+
+    local flingPart = Instance.new("Part")
+    flingPart.Size = Vector3.new(4, 4, 4)
+    flingPart.CanCollide = false
+    flingPart.Transparency = 1
+    flingPart.Massless = true
+    flingPart.Parent = workspace
+    flingPart.CFrame = tHRP.CFrame
+
+    local weld = Instance.new("Weld")
+    weld.Part0 = flingPart
+    weld.Part1 = tHRP
+    weld.Parent = flingPart
+
+    local bv = Instance.new("BodyVelocity")
+    bv.MaxForce = Vector3.new(math.huge, math.huge, math.huge)
+    bv.Velocity = Vector3.new(math.random(-200, 200), 600, math.random(-200, 200))
+    bv.Parent = flingPart
+
+    local bg = Instance.new("BodyGyro")
+    bg.MaxTorque = Vector3.new(math.huge, math.huge, math.huge)
+    bg.P = 10000; bg.D = 100
+    bg.CFrame = CFrame.Angles(math.rad(90), 0, 0)
+    bg.Parent = flingPart
+
+    task.wait(0.4)
+    pcall(function() flingPart:Destroy() end)
+
+    task.wait(0.1)
+    if myHRP and myHRP.Parent then
+        pcall(function()
+            myHRP.Velocity = Vector3.new(0, 0, 0)
+            myHRP.RotVelocity = Vector3.new(0, 0, 0)
+            myHRP.CFrame = safePos
+        end)
+    end
+
+    task.spawn(function()
+        task.wait(1.5)
+        local ch = LocalPlayer.Character
+        local hrp = ch and ch:FindFirstChild("HumanoidRootPart")
+        if not hrp or hrp.Position.Y < -100 then
+            pcall(function() LocalPlayer.Character:BreakJoints() end)
         end
-    end
-    
-    local role = GetPlayerRole(player)
-    local color = GetRoleColor(role)
-    
-    -- Highlight oluştur
-    local highlight = Instance.new("Highlight")
-    highlight.Name = "MM2_ESP_Highlight"
-    highlight.FillColor = color
-    highlight.OutlineColor = Color3.new(1, 1, 1)
-    highlight.FillTransparency = 0.6
-    highlight.OutlineTransparency = 0.2
-    highlight.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
-    highlight.Parent = character
-    
-    -- BillboardGui (İsim ve mesafe)
-    local billboard = Instance.new("BillboardGui")
-    billboard.Name = "MM2_ESP_Billboard"
-    billboard.Size = UDim2.new(0, 200, 0, 50)
-    billboard.StudsOffset = Vector3.new(0, 3, 0)
-    billboard.AlwaysOnTop = true
-    billboard.Parent = character
-    
-    local nameLabel = Instance.new("TextLabel")
-    nameLabel.Name = "NameLabel"
-    nameLabel.Size = UDim2.new(1, 0, 0.5, 0)
-    nameLabel.BackgroundTransparency = 1
-    nameLabel.Text = player.Name .. " [" .. role .. "]"
-    nameLabel.TextColor3 = color
-    nameLabel.TextStrokeTransparency = 0
-    nameLabel.TextSize = 16
-    nameLabel.Font = Enum.Font.GothamBold
-    nameLabel.Parent = billboard
-    
-    local distanceLabel = Instance.new("TextLabel")
-    distanceLabel.Name = "DistanceLabel"
-    distanceLabel.Size = UDim2.new(1, 0, 0.5, 0)
-    distanceLabel.Position = UDim2.new(0, 0, 0.5, 0)
-    distanceLabel.BackgroundTransparency = 1
-    distanceLabel.Text = "0 studs"
-    distanceLabel.TextColor3 = Color3.new(1, 1, 1)
-    distanceLabel.TextStrokeTransparency = 0
-    distanceLabel.TextSize = 14
-    distanceLabel.Font = Enum.Font.Gotham
-    distanceLabel.Parent = billboard
-    
-    ESPObjects[player] = {
-        Highlight = highlight,
-        Billboard = billboard,
-        NameLabel = nameLabel,
-        DistanceLabel = distanceLabel,
-        Character = character
-    }
+    end)
 end
 
--- ESP temizleme (tek oyuncu)
+-- ============================================================
+-- ESP
+-- ============================================================
 local function RemoveESP(player)
-    local esp = ESPObjects[player]
-    if not esp then return end
-    
-    if esp.Highlight and esp.Highlight.Parent then
-        esp.Highlight:Destroy()
-    end
-    if esp.Billboard and esp.Billboard.Parent then
-        esp.Billboard:Destroy()
-    end
-    
+    local e = ESPObjects[player]
+    if not e then return end
+    pcall(function() if e.Highlight then e.Highlight:Destroy() end end)
+    pcall(function() if e.Billboard then e.Billboard:Destroy() end end)
     ESPObjects[player] = nil
 end
 
--- Tüm oyuncular için ESP güncelle
-local function UpdateAllESP()
-    for _, player in pairs(Players:GetPlayers()) do
-        if player ~= LocalPlayer and player.Character then
-            CreateESP(player)
-        end
+local function CreateESP(player)
+    if not player or player == LocalPlayer or not player.Character then return end
+    if not player.Character:FindFirstChild("HumanoidRootPart") then return end
+
+    local role = GetRole(player)
+    local color = RoleColor(role)
+
+    local hl = Instance.new("Highlight")
+    hl.Name = "MM2_ESP_HL"
+    hl.FillColor = color
+    hl.OutlineColor = Color3.new(1, 1, 1)
+    hl.FillTransparency = 0.55
+    hl.OutlineTransparency = 0.15
+    hl.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+    hl.Parent = player.Character
+
+    local bb = Instance.new("BillboardGui")
+    bb.Name = "MM2_ESP_BB"
+    bb.Size = UDim2.new(0, 200, 0, 46)
+    bb.StudsOffset = Vector3.new(0, 3.2, 0)
+    bb.AlwaysOnTop = true
+    bb.Parent = player.Character
+
+    local nameL = Instance.new("TextLabel")
+    nameL.Size = UDim2.new(1, 0, 0.5, 0)
+    nameL.BackgroundTransparency = 1
+    nameL.Text = player.Name .. " [" .. role .. "]"
+    nameL.TextColor3 = color
+    nameL.TextStrokeTransparency = 0
+    nameL.TextStrokeColor3 = Color3.new(0, 0, 0)
+    nameL.TextSize = 15
+    nameL.Font = Enum.Font.GothamBold
+    nameL.Parent = bb
+
+    local distL = Instance.new("TextLabel")
+    distL.Size = UDim2.new(1, 0, 0.5, 0)
+    distL.Position = UDim2.new(0, 0, 0.5, 0)
+    distL.BackgroundTransparency = 1
+    distL.Text = "0 studs"
+    distL.TextColor3 = Color3.new(1, 1, 1)
+    distL.TextStrokeTransparency = 0
+    distL.TextStrokeColor3 = Color3.new(0, 0, 0)
+    distL.TextSize = 13
+    distL.Font = Enum.Font.Gotham
+    distL.Parent = bb
+
+    ESPObjects[player] = { Highlight = hl, Billboard = bb, NameLabel = nameL, DistanceLabel = distL }
+end
+
+local function EnsureESP(player)
+    if not player or player == LocalPlayer or not player.Character then return end
+    local e = ESPObjects[player]
+    if not e or not e.Highlight or not e.Highlight.Parent
+       or not e.Billboard or not e.Billboard.Parent then
+        RemoveESP(player)
+        CreateESP(player)
     end
 end
 
--- ESP döngüsü (Throttling ile optimize edilmiş)
-local espAccumulator = 0
-local espInterval = 1/30 -- 30 FPS'de güncelle
-
-local function ESPLoop(deltaTime)
-    espAccumulator = espAccumulator + deltaTime
-    if espAccumulator < espInterval then return end
-    espAccumulator = 0
-    
-    if not Config.ESP.Enabled then
-        -- Tüm ESP'leri temizle
-        for player, _ in pairs(ESPObjects) do
-            RemoveESP(player)
-        end
-        return
-    end
-    
-    for player, esp in pairs(ESPObjects) do
-        if not player or not player.Character or not esp.Billboard then
-            RemoveESP(player)
-            continue
-        end
-        
-        local distance = GetDistance(player)
-        if distance > Config.ESP.MaxDistance then
-            esp.Billboard.Enabled = false
-            if esp.Highlight then esp.Highlight.Enabled = false end
-        else
-            esp.Billboard.Enabled = true
-            if esp.Highlight then esp.Highlight.Enabled = true end
-            
-            -- Rol güncellemesi
-            local role = GetPlayerRole(player)
-            local color = GetRoleColor(role)
-            
-            if esp.NameLabel then
-                esp.NameLabel.Text = player.Name .. " [" .. role .. "]"
-                esp.NameLabel.TextColor3 = color
-            end
-            if esp.Highlight then
-                esp.Highlight.FillColor = color
-            end
-            if esp.DistanceLabel then
-                esp.DistanceLabel.Text = math.floor(distance) .. " studs"
-            end
-        end
-    end
-end
-
--- ============================================================
--- DÜŞEN SİLAH ESP
--- ============================================================
-local function UpdateGunDropESP()
-    -- Önceki ESP'yi temizle
+-- Gun Drop ESP
+local function ClearGunDropESP()
     if GunDropESP then
-        if GunDropESP.Highlight then GunDropESP.Highlight:Destroy() end
-        if GunDropESP.Billboard then GunDropESP.Billboard:Destroy() end
+        pcall(function() if GunDropESP.Highlight then GunDropESP.Highlight:Destroy() end end)
+        pcall(function() if GunDropESP.Billboard then GunDropESP.Billboard:Destroy() end end)
         GunDropESP = nil
     end
-    
+end
+
+local function UpdateGunDropESP()
+    ClearGunDropESP()
     if not Config.ESP.ShowGunDrop then return end
-    
-    -- Düşen silahı bul
-    local gun = workspace:FindFirstChild("GunDrop")
+
+    local gun
+    for _, name in ipairs({"GunDrop", "Gun"}) do
+        gun = workspace:FindFirstChild(name)
+        if gun then break end
+    end
     if not gun then
-        -- Alternatif isimler
-        gun = workspace:FindFirstChild("Gun")
+        for _, obj in ipairs(workspace:GetChildren()) do
+            if obj.Name:lower():find("gundrop") then gun = obj; break end
+        end
     end
     if not gun then return end
-    
     local handle = gun:FindFirstChild("Handle") or gun:FindFirstChildWhichIsA("BasePart")
     if not handle then return end
-    
-    -- Highlight
-    local highlight = Instance.new("Highlight")
-    highlight.Name = "MM2_GunDrop_ESP"
-    highlight.FillColor = Color3.fromRGB(255, 165, 0) -- Turuncu
-    highlight.OutlineColor = Color3.new(1, 1, 1)
-    highlight.FillTransparency = 0.5
-    highlight.OutlineTransparency = 0.1
-    highlight.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
-    highlight.Parent = gun
-    
-    -- Billboard
-    local billboard = Instance.new("BillboardGui")
-    billboard.Name = "MM2_GunDrop_Billboard"
-    billboard.Size = UDim2.new(0, 150, 0, 40)
-    billboard.StudsOffset = Vector3.new(0, 2, 0)
-    billboard.AlwaysOnTop = true
-    billboard.Parent = gun
-    
-    local label = Instance.new("TextLabel")
-    label.Size = UDim2.new(1, 0, 1, 0)
-    label.BackgroundTransparency = 1
-    label.Text = "🔫 DÜŞEN SİLAH"
-    label.TextColor3 = Color3.fromRGB(255, 165, 0)
-    label.TextStrokeTransparency = 0
-    label.TextSize = 14
-    label.Font = Enum.Font.GothamBold
-    label.Parent = billboard
-    
-    GunDropESP = {
-        Highlight = highlight,
-        Billboard = billboard,
-        Label = label,
-        Part = handle
-    }
+
+    local hl = Instance.new("Highlight")
+    hl.FillColor = Color3.fromRGB(255, 165, 0)
+    hl.OutlineColor = Color3.new(1, 1, 1)
+    hl.FillTransparency = 0.5
+    hl.OutlineTransparency = 0.1
+    hl.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+    hl.Parent = gun
+
+    local bb = Instance.new("BillboardGui")
+    bb.Size = UDim2.new(0, 160, 0, 40)
+    bb.StudsOffset = Vector3.new(0, 2, 0)
+    bb.AlwaysOnTop = true
+    bb.Parent = gun
+
+    local lbl = Instance.new("TextLabel")
+    lbl.Size = UDim2.new(1, 0, 1, 0)
+    lbl.BackgroundTransparency = 1
+    lbl.Text = "🔫 DÜŞEN SİLAH"
+    lbl.TextColor3 = Color3.fromRGB(255, 165, 0)
+    lbl.TextStrokeTransparency = 0
+    lbl.TextSize = 14
+    lbl.Font = Enum.Font.GothamBold
+    lbl.Parent = bb
+
+    GunDropESP = { Highlight = hl, Billboard = bb, Label = lbl, Part = handle }
 end
 
--- ============================================================
--- TRACERS (Oyunculara Çizgi)
--- ============================================================
+-- Tracers
+local function ClearTracers()
+    for _, t in ipairs(Tracers) do pcall(function() t:Destroy() end) end
+    table.clear(Tracers)
+end
+
 local function UpdateTracers()
-    -- Tüm tracer'ları temizle
-    for _, tracer in pairs(TracerObjects) do
-        if tracer then tracer:Destroy() end
-    end
-    TracerObjects = {}
-    
+    ClearTracers()
     if not Config.ESP.ShowTracers or not Config.ESP.Enabled then return end
-    
-    local cameraPos = Camera.CFrame.Position
-    
-    for _, player in pairs(Players:GetPlayers()) do
-        if player == LocalPlayer or not player.Character then continue end
-        
-        local root = player.Character:FindFirstChild("HumanoidRootPart")
-        if not root then continue end
-        
-        local distance = (root.Position - cameraPos).Magnitude
-        if distance > Config.ESP.MaxDistance then continue end
-        
-        local role = GetPlayerRole(player)
-        local color = GetRoleColor(role)
-        
-        -- Tracer çizgisi (Drawing kütüphanesi yoksa Beam kullanılabilir)
-        local attachment0 = Instance.new("Attachment")
-        attachment0.Parent = Camera
-        
-        local attachment1 = Instance.new("Attachment")
-        attachment1.Parent = root
-        
+    for _, plr in ipairs(Players:GetPlayers()) do
+        if plr == LocalPlayer or not plr.Character then continue end
+        local root = plr.Character:FindFirstChild("HumanoidRootPart")
+        if not root or Distance(plr) > Config.ESP.MaxDistance then continue end
+        local color = RoleColor(GetRole(plr))
+        local a0 = Instance.new("Attachment"); a0.Parent = Camera
+        local a1 = Instance.new("Attachment"); a1.Parent = root
         local beam = Instance.new("Beam")
-        beam.Attachment0 = attachment0
-        beam.Attachment1 = attachment1
+        beam.Attachment0 = a0
+        beam.Attachment1 = a1
         beam.Color = ColorSequence.new(color)
-        beam.Transparency = NumberSequence.new(0.5)
-        beam.Width0 = 0.05
-        beam.Width1 = 0.05
+        beam.Transparency = NumberSequence.new(0.55)
+        beam.Width0 = 0.06; beam.Width1 = 0.06
         beam.FaceCamera = true
         beam.Parent = Camera
-        
-        table.insert(TracerObjects, beam)
-        table.insert(TracerObjects, attachment0)
-        table.insert(TracerObjects, attachment1)
+        table.insert(Tracers, beam); table.insert(Tracers, a0); table.insert(Tracers, a1)
     end
 end
 
--- ============================================================
--- SİLAH SİLENT AİM (Şerif iken Katili vurma)
--- ============================================================
-local function GetClosestTarget(roleFilter)
-    local closest = nil
-    local shortestDist = math.huge
-    local cameraPos = Camera.CFrame.Position
-    
-    for _, player in pairs(Players:GetPlayers()) do
-        if player == LocalPlayer or not player.Character then continue end
-        
-        local role = GetPlayerRole(player)
-        if roleFilter and role ~= roleFilter then continue end
-        
-        local root = player.Character:FindFirstChild("HumanoidRootPart")
-        if not root then continue end
-        
-        local dist = (root.Position - cameraPos).Magnitude
-        if dist < shortestDist and dist <= Config.SilentAim.FOV then
-            shortestDist = dist
-            closest = player
+-- Ana ESP döngüsü
+local function ESPUpdateLoop()
+    while task.wait(Config.ESP.RefreshRate) do
+        if not Config.ESP.Enabled then
+            for plr in pairs(ESPObjects) do RemoveESP(plr) end
+            ClearTracers(); ClearGunDropESP()
+            continue
         end
-    end
-    
-    return closest
-end
-
--- Silent Aim döngüsü
-local function SilentAimLoop()
-    while task.wait(0.1) do
-        if not Config.SilentAim.GunEnabled then continue end
-        
-        local target = GetClosestTarget("Murderer")
-        if not target then continue end
-        
-        local character = target.Character
-        if not character then continue end
-        
-        local head = character:FindFirstChild("Head")
-        if not head then continue end
-        
-        -- Kamera hedefe yönlendir (Silent Aim)
-        local cameraPos = Camera.CFrame.Position
-        local direction = (head.Position - cameraPos).Unit
-        
-        -- İnsansı gecikme ile yumuşak geçiş
-        local tween = TweenService:Create(
-            Camera,
-            TweenInfo.new(Config.SilentAim.Smoothness, Enum.EasingStyle.Linear),
-            {CFrame = CFrame.new(cameraPos, cameraPos + direction)}
-        )
-        tween:Play()
-        
-        HumanDelay(0.05, 0.15)
-    end
-end
-
--- ============================================================
--- BIÇAK SİLENT AİM (Katil iken yakındaki oyuncuları avlama)
--- ============================================================
-local function KnifeSilentAimLoop()
-    while task.wait(0.2) do
-        if not Config.SilentAim.KnifeEnabled then continue end
-        
-        local character = LocalPlayer.Character
-        if not character then continue end
-        
-        -- Katil mi kontrol et
-        local backpack = LocalPlayer:FindFirstChild("Backpack")
-        local isMurderer = (backpack and backpack:FindFirstChild("Knife")) or 
-                           (character and character:FindFirstChild("Knife"))
-        if not isMurderer then continue end
-        
-        -- En yakın oyuncuyu bul
-        local closest = nil
-        local shortestDist = math.huge
-        local myRoot = character:FindFirstChild("HumanoidRootPart")
-        if not myRoot then continue end
-        
-        for _, player in pairs(Players:GetPlayers()) do
-            if player == LocalPlayer or not player.Character then continue end
-            
-            local root = player.Character:FindFirstChild("HumanoidRootPart")
-            if not root then continue end
-            
-            local dist = (root.Position - myRoot.Position).Magnitude
-            if dist < shortestDist and dist < 15 then -- 15 stud mesafe
-                shortestDist = dist
-                closest = player
+        for _, plr in ipairs(Players:GetPlayers()) do
+            if plr ~= LocalPlayer then EnsureESP(plr) end
+        end
+        for plr, e in pairs(ESPObjects) do
+            if not plr or not plr.Character then RemoveESP(plr); continue end
+            local role = GetRole(plr)
+            local color = RoleColor(role)
+            local dist = Distance(plr)
+            if e.Highlight then
+                e.Highlight.FillColor = color
+                e.Highlight.Enabled = dist <= Config.ESP.MaxDistance
+            end
+            if e.Billboard then e.Billboard.Enabled = dist <= Config.ESP.MaxDistance end
+            if e.NameLabel then
+                e.NameLabel.Text = plr.Name .. " [" .. role .. "]"
+                e.NameLabel.TextColor3 = color
+            end
+            if e.DistanceLabel then
+                e.DistanceLabel.Text = string.format("%d studs", math.floor(dist))
             end
         end
-        
-        if closest and closest.Character then
-            local targetRoot = closest.Character:FindFirstChild("HumanoidRootPart")
-            if targetRoot then
-                -- Hedefe doğru ışınlanma (insansı gecikme ile)
-                local tween = TweenService:Create(
-                    myRoot,
-                    TweenInfo.new(0.1, Enum.EasingStyle.Linear),
-                    {CFrame = targetRoot.CFrame}
-                )
-                tween:Play()
-                
-                -- Bıçak saldırısı
-                task.wait(0.1)
-                local tool = character:FindFirstChildOfClass("Tool")
-                if tool then
-                    tool:Activate()
-                end
-            end
-        end
+        UpdateGunDropESP()
+        UpdateTracers()
+        -- Hedef güncellemesi (murderer)
+        SilentAimTarget = GetTargetPlayer("Murderer")
     end
 end
 
 -- ============================================================
--- FLING (Hedef Oyuncuyu Fırlatma)
+-- BIÇAK SİLENT AİM + AUTO KILL (Katil)
 -- ============================================================
-local function FlingPlayer(targetPlayer)
-    if not targetPlayer or not targetPlayer.Character then return end
-    
-    local targetRoot = targetPlayer.Character:FindFirstChild("HumanoidRootPart")
-    if not targetRoot then return end
-    
-    -- Fling vektörü (harita dışına doğru)
-    local flingDirection = Vector3.new(0, 500, 0) -- Yukarı doğru fırlat
-    local randomOffset = Vector3.new(math.random(-100, 100), 0, math.random(-100, 100))
-    
-    -- İnsansı gecikme
-    HumanDelay(0.1, 0.3)
-    
-    -- Hedefi fırlat
-    targetRoot.Velocity = flingDirection + randomOffset
-    targetRoot.RotVelocity = Vector3.new(math.random(-50, 50), math.random(-50, 50), math.random(-50, 50))
-end
+local function KnifeAutoKillLoop()
+    while task.wait(0.15) do
+        if not (Config.SilentAim.KnifeEnabled or Config.SilentAim.AutoKill) then continue end
+        local ch = LocalPlayer.Character
+        if not ch then continue end
+        local tool = ch:FindFirstChild("Knife") or GetLocalKnife()
+        if not tool or tool.Parent ~= ch then continue end
 
--- Fling döngüsü
-local function FlingLoop()
-    while task.wait(0.5) do
-        if not Config.Misc.FlingTarget then continue end
-        
-        local target = Config.Misc.FlingTarget
+        -- Görüş açısındaki en yakın oyuncuyu bul
+        local target, best = nil, math.huge
+        for _, plr in ipairs(Players:GetPlayers()) do
+            if plr == LocalPlayer or not plr.Character then continue end
+            local hum = plr.Character:FindFirstChildOfClass("Humanoid")
+            if not hum or hum.Health <= 0 then continue end
+            local head = plr.Character:FindFirstChild("Head")
+            if not head then continue end
+            if not IsInFOV(head.Position, Config.SilentAim.AutoKillFOV) then continue end
+            local d = (head.Position - Camera.CFrame.Position).Magnitude
+            if d < best and d <= Config.SilentAim.AutoKillRange then best = d; target = plr end
+        end
+
         if target and target.Character then
-            FlingPlayer(target)
-        else
-            Config.Misc.FlingTarget = nil
+            local tRoot = target.Character:FindFirstChild("HumanoidRootPart")
+            local mRoot = ch:FindFirstChild("HumanoidRootPart")
+            if tRoot and mRoot then
+                local dist = (tRoot.Position - mRoot.Position).Magnitude
+                if dist > 4 then
+                    local t = TweenService:Create(mRoot,
+                        TweenInfo.new(0.11, Enum.EasingStyle.Linear),
+                        {CFrame = tRoot.CFrame * CFrame.new(0, 0, 2)})
+                    t:Play()
+                    task.wait(0.12)
+                end
+                pcall(function() tool:Activate() end)
+                HumanDelay(0.06, 0.14)
+            end
+        end
+    end
+end
+
+-- ============================================================
+-- OTOMATİK ATEŞ (Buton basılıyken veya ateş butonu tıklanınca)
+-- ============================================================
+local FireHeld = false
+
+local function TryAutoFire()
+    if not Config.SilentAim.GunEnabled then return end
+    local gun = GetLocalGun()
+    if not gun or gun.Parent ~= LocalPlayer.Character then return end
+
+    local target = GetTargetPlayer("Murderer", Config.SilentAim.FOV, Config.ESP.MaxDistance)
+    if not target then return end
+
+    -- Silahı aktif et (FireServer hook'u otomatik headshot pozisyonuna yönlendirecek)
+    pcall(function() gun:Activate() end)
+end
+
+local function AutoFireLoop()
+    while task.wait(0.08) do
+        if FireHeld and Config.SilentAim.GunEnabled then
+            TryAutoFire()
         end
     end
 end
@@ -551,445 +505,577 @@ end
 -- AUTO COIN FARM
 -- ============================================================
 local function GetClosestCoin()
-    local closest = nil
-    local shortestDist = math.huge
-    local myRoot = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
-    if not myRoot then return nil end
-    
-    -- Coin container'ı bul
-    local coinFolder = workspace:FindFirstChild("CoinFolder") or 
-                       workspace:FindFirstChild("Coins") or
-                       workspace:FindFirstChild("CoinContainer")
-    
-    if not coinFolder then
-        -- Tüm workspace'te coin ara
-        for _, obj in pairs(workspace:GetDescendants()) do
-            if obj.Name:lower():find("coin") and obj:IsA("BasePart") then
-                local dist = (obj.Position - myRoot.Position).Magnitude
-                if dist < shortestDist and dist < 500 then
-                    shortestDist = dist
-                    closest = obj
-                end
-            end
-        end
-    else
-        for _, coin in pairs(coinFolder:GetChildren()) do
-            if coin:IsA("BasePart") then
-                local dist = (coin.Position - myRoot.Position).Magnitude
-                if dist < shortestDist and dist < 500 then
-                    shortestDist = dist
-                    closest = coin
-                end
-            end
+    local root = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
+    if not root then return nil end
+    local best, bestD = nil, math.huge
+    for _, obj in ipairs(workspace:GetDescendants()) do
+        if obj:IsA("BasePart") and obj.Name:lower():find("coin") then
+            local d = (obj.Position - root.Position).Magnitude
+            if d < bestD and d <= Config.Farm.MaxDistance then bestD, best = d, obj end
         end
     end
-    
-    return closest
+    return best
 end
 
--- Auto Farm döngüsü (Throttling ile)
-local farmAccumulator = 0
-local farmInterval = 0.5 -- 2 saniyede bir kontrol
-
-local function AutoFarmLoop(deltaTime)
-    farmAccumulator = farmAccumulator + deltaTime
-    if farmAccumulator < farmInterval then return end
-    farmAccumulator = 0
-    
-    if not Config.Farm.AutoCoin then return end
-    
-    -- Çanta doluluk kontrolü (MM2'de çanta limiti)
-    if Config.Farm.StopWhenFull then
-        local backpack = LocalPlayer:FindFirstChild("Backpack")
-        if backpack then
-            local coinCount = 0
-            for _, item in pairs(backpack:GetChildren()) do
-                if item.Name:lower():find("coin") then
-                    coinCount = coinCount + 1
-                end
+local function AutoFarmLoop()
+    while task.wait(0.5) do
+        if not Config.Farm.AutoCoin then continue end
+        local ch = LocalPlayer.Character
+        if not ch then continue end
+        local root = ch:FindFirstChild("HumanoidRootPart")
+        local hum = ch:FindFirstChildOfClass("Humanoid")
+        if not root or not hum or hum.Health <= 0 then continue end
+        local bp = LocalPlayer:FindFirstChild("Backpack")
+        if bp then
+            local cnt = 0
+            for _, it in ipairs(bp:GetChildren()) do
+                if it.Name:lower():find("coin") then cnt = cnt + 1 end
             end
-            if coinCount >= 50 then -- Varsayılan limit
-                return
-            end
+            if cnt >= Config.Farm.MaxCoins then continue end
         end
+        local coin = GetClosestCoin()
+        if not coin then continue end
+        HumanDelay(0.1, 0.2)
+        local dist = (coin.Position - root.Position).Magnitude
+        local t = TweenService:Create(root,
+            TweenInfo.new(dist / Config.Farm.FarmSpeed, Enum.EasingStyle.Linear),
+            {CFrame = CFrame.new(coin.Position + Vector3.new(0, 3, 0))})
+        t:Play()
     end
-    
-    local coin = GetClosestCoin()
-    if not coin then return end
-    
-    local myRoot = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
-    if not myRoot then return end
-    
-    -- İnsansı gecikme
-    HumanDelay(0.1, 0.2)
-    
-    -- Coin'e doğru Tween ile hareket (anti-cheat bypass)
-    local distance = (coin.Position - myRoot.Position).Magnitude
-    local travelTime = distance / Config.Farm.FarmSpeed
-    
-    local tween = TweenService:Create(
-        myRoot,
-        TweenInfo.new(travelTime, Enum.EasingStyle.Linear),
-        {CFrame = CFrame.new(coin.Position + Vector3.new(0, 3, 0))}
-    )
-    tween:Play()
 end
 
 -- ============================================================
--- HAREKET SİSTEMİ
+-- BUNNY HOP
 -- ============================================================
-
--- WalkSpeed güncelleme
-local function UpdateWalkSpeed()
-    local character = LocalPlayer.Character
-    if not character then return end
-    
-    local humanoid = character:FindFirstChildOfClass("Humanoid")
-    if not humanoid then return end
-    
-    humanoid.WalkSpeed = Config.Movement.WalkSpeed
-end
-
--- Bunny Hop döngüsü
 local function BunnyHopLoop()
-    while task.wait(0.1) do
+    while task.wait(0.05) do
         if not Config.Movement.BunnyHop then continue end
-        
-        local character = LocalPlayer.Character
-        if not character then continue end
-        
-        local humanoid = character:FindFirstChildOfClass("Humanoid")
-        if not humanoid then continue end
-        
-        -- Yerde mi kontrol et
-        if humanoid.FloorMaterial ~= Enum.Material.Air then
-            humanoid.Jump = true
+        local ch = LocalPlayer.Character
+        if not ch then continue end
+        local hum = ch:FindFirstChildOfClass("Humanoid")
+        if not hum then continue end
+        if hum.FloorMaterial ~= Enum.Material.Air then
+            hum:ChangeState(Enum.HumanoidStateType.Jumping)
+            task.wait()
+            hum:ChangeState(Enum.HumanoidStateType.Freefall)
         end
     end
 end
 
--- SpinBot döngüsü
+-- ============================================================
+-- SPINBOT
+-- ============================================================
 local function SpinBotLoop()
-    while task.wait(0.03) do
-        if not Config.Movement.SpinBot then continue end
-        
-        local character = LocalPlayer.Character
-        if not character then continue end
-        
-        local root = character:FindFirstChild("HumanoidRootPart")
+    local last = tick()
+    while task.wait(0.02) do
+        if not Config.Movement.SpinBot then last = tick(); continue end
+        local now = tick(); local dt = now - last; last = now
+        local ch = LocalPlayer.Character
+        if not ch then continue end
+        local root = ch:FindFirstChild("HumanoidRootPart")
         if not root then continue end
-        
-        -- 360 derece dönüş
-        local currentCFrame = root.CFrame
-        local rotatedCFrame = currentCFrame * CFrame.Angles(0, math.rad(Config.Movement.SpinSpeed), 0)
-        root.CFrame = rotatedCFrame
+        local delta = math.rad(Config.Movement.SpinSpeed) * dt
+        root.CFrame = root.CFrame * CFrame.Angles(0, delta, 0)
     end
 end
 
 -- ============================================================
 -- ANTI-AFK
 -- ============================================================
-local function AntiAFK()
-    local vu = game:GetService("VirtualUser")
-    
-    Connections[#Connections + 1] = LocalPlayer.Idled:Connect(function()
-        vu:CaptureController()
-        vu:ClickButton2(Vector2.new())
+local function SetupAntiAFK()
+    Connections[#Connections+1] = LocalPlayer.Idled:Connect(function()
+        if not Config.Misc.AntiAFK then return end
+        pcall(function()
+            VirtualUser:CaptureController()
+            VirtualUser:ClickButton2(Vector2.new())
+        end)
     end)
 end
 
--- ============================================================
--- ANA DÖNGÜLER (RenderStepped Optimizasyonu)
--- ============================================================
-local lastUpdate = tick()
-
-Connections[#Connections + 1] = RunService.RenderStepped:Connect(function(deltaTime)
-    local now = tick()
-    if now - lastUpdate < 1/60 then return end -- 60 FPS sınırı
-    lastUpdate = now
-    
-    -- Throttling uygulanmış döngüler
-    if Config.ESP.Enabled then
-        ESPLoop(deltaTime)
-        UpdateTracers()
-    end
-    
-    if Config.Farm.AutoCoin then
-        AutoFarmLoop(deltaTime)
-    end
-end)
-
--- Düşen silah ESP'sini periyodik güncelle
-Threads[#Threads + 1] = task.spawn(function()
-    while task.wait(1) do
-        if Config.ESP.ShowGunDrop and Config.ESP.Enabled then
-            UpdateGunDropESP()
-        end
-    end
-end)
+local function ApplyWalkSpeed()
+    local ch = LocalPlayer.Character
+    if not ch then return end
+    local hum = ch:FindFirstChildOfClass("Humanoid")
+    if hum then hum.WalkSpeed = Config.Movement.WalkSpeed end
+end
 
 -- ============================================================
 -- OYUNCU OLAYLARI
 -- ============================================================
-Connections[#Connections + 1] = Players.PlayerAdded:Connect(function(player)
-    player.CharacterAdded:Connect(function()
-        task.wait(1)
-        if Config.ESP.Enabled then
-            CreateESP(player)
+local function HookPlayer(plr)
+    Connections[#Connections+1] = plr.CharacterAdded:Connect(function(char)
+        task.wait(0.5)
+        if char.Parent and Config.ESP.Enabled then
+            RemoveESP(plr); CreateESP(plr)
+        end
+        if plr == LocalPlayer then
+            task.wait(0.5)
+            ApplyWalkSpeed()
         end
     end)
-end)
-
-Connections[#Connections + 1] = Players.PlayerRemoving:Connect(function(player)
-    RemoveESP(player)
-end)
-
--- Mevcut oyuncular için ESP başlat
-UpdateAllESP()
-
--- ============================================================
--- SCRIPT BAŞLATMA
--- ============================================================
--- Hareket döngülerini başlat
-Threads[#Threads + 1] = task.spawn(BunnyHopLoop)
-Threads[#Threads + 1] = task.spawn(SpinBotLoop)
-Threads[#Threads + 1] = task.spawn(SilentAimLoop)
-Threads[#Threads + 1] = task.spawn(KnifeSilentAimLoop)
-Threads[#Threads + 1] = task.spawn(FlingLoop)
-
--- Anti-AFK başlat
-if Config.Misc.AntiAFK then
-    AntiAFK()
 end
 
--- WalkSpeed başlangıç değeri
-UpdateWalkSpeed()
+for _, plr in ipairs(Players:GetPlayers()) do HookPlayer(plr) end
+Connections[#Connections+1] = Players.PlayerAdded:Connect(HookPlayer)
+Connections[#Connections+1] = Players.PlayerRemoving:Connect(function(plr) RemoveESP(plr) end)
 
 -- ============================================================
--- KULLANICI ARAYÜZÜ (Basit, Modern UI)
+-- UI
 -- ============================================================
-local ScreenGui = Instance.new("ScreenGui")
-ScreenGui.Name = "MM2_Ultimate_UI"
-ScreenGui.ResetOnSpawn = false
-ScreenGui.Parent = LocalPlayer:WaitForChild("PlayerGui")
+local function BuildUI()
+    local gui = Instance.new("ScreenGui")
+    gui.Name = "MM2_UI"
+    gui.ResetOnSpawn = false
+    gui.IgnoreGuiInset = true
+    gui.Parent = LocalPlayer:WaitForChild("PlayerGui")
 
--- Ana Frame
-local MainFrame = Instance.new("Frame")
-MainFrame.Name = "MainFrame"
-MainFrame.Size = UDim2.new(0, 350, 0, 500)
-MainFrame.Position = UDim2.new(0.5, -175, 0.5, -250)
-MainFrame.BackgroundColor3 = Color3.fromRGB(30, 30, 40)
-MainFrame.BackgroundTransparency = 0.1
-MainFrame.BorderSizePixel = 0
-MainFrame.Active = true
-MainFrame.Draggable = true
-MainFrame.Parent = ScreenGui
+    -- ============ ANA PANEL ============
+    local main = Instance.new("Frame")
+    main.Name = "Main"
+    main.Size = UDim2.new(0, 400, 0, 540)
+    main.Position = UDim2.new(0.5, -200, 0.5, -270)
+    main.BackgroundColor3 = Color3.fromRGB(24, 24, 32)
+    main.BackgroundTransparency = 0.05
+    main.BorderSizePixel = 0
+    main.Active = true
+    main.Draggable = true
+    main.Parent = gui
+    Instance.new("UICorner", main).CornerRadius = UDim.new(0, 12)
 
--- Yuvarlak köşeler
-local UICorner = Instance.new("UICorner")
-UICorner.CornerRadius = UDim.new(0, 12)
-UICorner.Parent = MainFrame
+    local stroke = Instance.new("UIStroke")
+    stroke.Color = Color3.fromRGB(120, 130, 255)
+    stroke.Thickness = 1
+    stroke.Transparency = 0.5
+    stroke.Parent = main
 
--- Başlık
-local Title = Instance.new("TextLabel")
-Title.Size = UDim2.new(1, 0, 0, 40)
-Title.BackgroundColor3 = Color3.fromRGB(40, 40, 55)
-Title.Text = "🔪 MM2 Ultimate Script"
-Title.TextColor3 = Color3.new(1, 1, 1)
-Title.Font = Enum.Font.GothamBold
-Title.TextSize = 18
-Title.Parent = MainFrame
+    local title = Instance.new("TextLabel")
+    title.Size = UDim2.new(1, 0, 0, 42)
+    title.BackgroundColor3 = Color3.fromRGB(34, 34, 48)
+    title.Text = "  🔪 MM2 Ultimate v3"
+    title.TextColor3 = Color3.fromRGB(220, 220, 255)
+    title.Font = Enum.Font.GothamBold
+    title.TextSize = 17
+    title.TextXAlignment = Enum.TextXAlignment.Left
+    title.Parent = main
+    Instance.new("UICorner", title).CornerRadius = UDim.new(0, 12)
 
-local TitleCorner = Instance.new("UICorner")
-TitleCorner.CornerRadius = UDim.new(0, 12)
-TitleCorner.Parent = Title
+    local closeBtn = Instance.new("TextButton")
+    closeBtn.Size = UDim2.new(0, 30, 0, 30)
+    closeBtn.Position = UDim2.new(1, -38, 0, 6)
+    closeBtn.BackgroundColor3 = Color3.fromRGB(230, 60, 60)
+    closeBtn.Text = "─"
+    closeBtn.TextColor3 = Color3.new(1, 1, 1)
+    closeBtn.Font = Enum.Font.GothamBold
+    closeBtn.TextSize = 18
+    closeBtn.Parent = main
+    Instance.new("UICorner", closeBtn).CornerRadius = UDim.new(0, 8)
 
--- Kapatma butonu
-local CloseBtn = Instance.new("TextButton")
-CloseBtn.Size = UDim2.new(0, 30, 0, 30)
-CloseBtn.Position = UDim2.new(1, -35, 0, 5)
-CloseBtn.BackgroundColor3 = Color3.fromRGB(255, 80, 80)
-CloseBtn.Text = "X"
-CloseBtn.TextColor3 = Color3.new(1, 1, 1)
-CloseBtn.Font = Enum.Font.GothamBold
-CloseBtn.TextSize = 14
-CloseBtn.Parent = MainFrame
+    local scroll = Instance.new("ScrollingFrame")
+    scroll.Size = UDim2.new(1, -16, 1, -60)
+    scroll.Position = UDim2.new(0, 8, 0, 50)
+    scroll.BackgroundTransparency = 1
+    scroll.BorderSizePixel = 0
+    scroll.ScrollBarThickness = 5
+    scroll.ScrollBarImageColor3 = Color3.fromRGB(120, 130, 255)
+    scroll.CanvasSize = UDim2.new(0, 0, 0, 0)
+    scroll.AutomaticCanvasSize = Enum.AutomaticSize.Y
+    scroll.Parent = main
 
-local CloseCorner = Instance.new("UICorner")
-CloseCorner.CornerRadius = UDim.new(0, 8)
-CloseCorner.Parent = CloseBtn
+    local layout = Instance.new("UIListLayout")
+    layout.Padding = UDim.new(0, 6)
+    layout.SortOrder = Enum.SortOrder.LayoutOrder
+    layout.Parent = scroll
 
-CloseBtn.MouseButton1Click:Connect(function()
-    MainFrame.Visible = false
-end)
-
--- İçerik Alanı (Scroll)
-local ScrollFrame = Instance.new("ScrollingFrame")
-ScrollFrame.Size = UDim2.new(1, -20, 1, -60)
-ScrollFrame.Position = UDim2.new(0, 10, 0, 50)
-ScrollFrame.BackgroundTransparency = 1
-ScrollFrame.ScrollBarThickness = 6
-ScrollFrame.ScrollBarImageColor3 = Color3.fromRGB(100, 100, 150)
-ScrollFrame.Parent = MainFrame
-
-local ScrollLayout = Instance.new("UIListLayout")
-ScrollLayout.Padding = UDim.new(0, 8)
-ScrollLayout.SortOrder = Enum.SortOrder.LayoutOrder
-ScrollLayout.Parent = ScrollFrame
-
--- Buton oluşturma yardımcısı
-local function CreateToggleButton(text, initialState, callback)
-    local btn = Instance.new("TextButton")
-    btn.Size = UDim2.new(1, 0, 0, 35)
-    btn.BackgroundColor3 = initialState and Color3.fromRGB(0, 150, 80) or Color3.fromRGB(60, 60, 80)
-    btn.Text = text .. (initialState and " [AÇIK]" or " [KAPALI]")
-    btn.TextColor3 = Color3.new(1, 1, 1)
-    btn.Font = Enum.Font.Gotham
-    btn.TextSize = 14
-    btn.Parent = ScrollFrame
-    
-    local corner = Instance.new("UICorner")
-    corner.CornerRadius = UDim.new(0, 8)
-    corner.Parent = btn
-    
-    local state = initialState
-    
-    btn.MouseButton1Click:Connect(function()
-        state = not state
-        btn.BackgroundColor3 = state and Color3.fromRGB(0, 150, 80) or Color3.fromRGB(60, 60, 80)
-        btn.Text = text .. (state and " [AÇIK]" or " [KAPALI]")
-        callback(state)
-    end)
-    
-    return btn
-end
-
--- Ana kategoriler
-local categories = {
-    { name = "ESP", items = {
-        { "Tüm ESP", "ESP.Enabled", function(v) Config.ESP.Enabled = v end },
-        { "Tracers", "ESP.ShowTracers", function(v) Config.ESP.ShowTracers = v end },
-        { "Düşen Silah ESP", "ESP.ShowGunDrop", function(v) Config.ESP.ShowGunDrop = v end },
-    }},
-    { name = "Combat", items = {
-        { "Silah Silent Aim", "SilentAim.GunEnabled", function(v) Config.SilentAim.GunEnabled = v end },
-        { "Bıçak Silent Aim", "SilentAim.KnifeEnabled", function(v) Config.SilentAim.KnifeEnabled = v end },
-    }},
-    { name = "Movement", items = {
-        { "Bunny Hop", "Movement.BunnyHop", function(v) Config.Movement.BunnyHop = v end },
-        { "SpinBot", "Movement.SpinBot", function(v) Config.Movement.SpinBot = v end },
-    }},
-    { name = "Farm", items = {
-        { "Auto Coin Farm", "Farm.AutoCoin", function(v) Config.Farm.AutoCoin = v end },
-    }},
-    { name = "Misc", items = {
-        { "Anti-AFK", "Misc.AntiAFK", function(v) Config.Misc.AntiAFK = v end },
-    }}
-}
-
--- Kategorileri ve butonları oluştur
-for _, category in pairs(categories) do
-    local header = Instance.new("TextLabel")
-    header.Size = UDim2.new(1, 0, 0, 30)
-    header.BackgroundColor3 = Color3.fromRGB(50, 50, 70)
-    header.Text = "  " .. category.name
-    header.TextColor3 = Color3.fromRGB(150, 200, 255)
-    header.Font = Enum.Font.GothamBold
-    header.TextSize = 15
-    header.TextXAlignment = Enum.TextXAlignment.Left
-    header.Parent = ScrollFrame
-    
-    local hCorner = Instance.new("UICorner")
-    hCorner.CornerRadius = UDim.new(0, 6)
-    hCorner.Parent = header
-    
-    for _, item in pairs(category.items) do
-        local currentState = false
-        -- Mevcut durumu al
-        if item[2] == "ESP.Enabled" then currentState = Config.ESP.Enabled end
-        if item[2] == "ESP.ShowTracers" then currentState = Config.ESP.ShowTracers end
-        if item[2] == "ESP.ShowGunDrop" then currentState = Config.ESP.ShowGunDrop end
-        if item[2] == "SilentAim.GunEnabled" then currentState = Config.SilentAim.GunEnabled end
-        if item[2] == "SilentAim.KnifeEnabled" then currentState = Config.SilentAim.KnifeEnabled end
-        if item[2] == "Movement.BunnyHop" then currentState = Config.Movement.BunnyHop end
-        if item[2] == "Movement.SpinBot" then currentState = Config.Movement.SpinBot end
-        if item[2] == "Farm.AutoCoin" then currentState = Config.Farm.AutoCoin end
-        if item[2] == "Misc.AntiAFK" then currentState = Config.Misc.AntiAFK end
-        
-        CreateToggleButton("  " .. item[1], currentState, item[3])
+    local function SectionLabel(text)
+        local l = Instance.new("TextLabel")
+        l.Size = UDim2.new(1, 0, 0, 30)
+        l.BackgroundColor3 = Color3.fromRGB(44, 46, 66)
+        l.Text = "  " .. text
+        l.TextColor3 = Color3.fromRGB(140, 170, 255)
+        l.Font = Enum.Font.GothamBold
+        l.TextSize = 14
+        l.TextXAlignment = Enum.TextXAlignment.Left
+        l.Parent = scroll
+        Instance.new("UICorner", l).CornerRadius = UDim.new(0, 6)
     end
-end
 
--- WalkSpeed Slider
-local speedLabel = Instance.new("TextLabel")
-speedLabel.Size = UDim2.new(1, 0, 0, 25)
-speedLabel.BackgroundTransparency = 1
-speedLabel.Text = "  WalkSpeed: " .. Config.Movement.WalkSpeed
-speedLabel.TextColor3 = Color3.new(1, 1, 1)
-speedLabel.Font = Enum.Font.Gotham
-speedLabel.TextSize = 14
-speedLabel.TextXAlignment = Enum.TextXAlignment.Left
-speedLabel.Parent = ScrollFrame
+    local function ToggleButton(text, initial, callback)
+        local btn = Instance.new("TextButton")
+        btn.Size = UDim2.new(1, 0, 0, 34)
+        btn.BackgroundColor3 = initial and Color3.fromRGB(30, 150, 90) or Color3.fromRGB(50, 52, 72)
+        btn.Text = "   " .. text .. (initial and "   [AÇIK]" or "   [KAPALI]")
+        btn.TextColor3 = Color3.new(1, 1, 1)
+        btn.Font = Enum.Font.Gotham
+        btn.TextSize = 13
+        btn.TextXAlignment = Enum.TextXAlignment.Left
+        btn.Parent = scroll
+        Instance.new("UICorner", btn).CornerRadius = UDim.new(0, 6)
+        local state = initial
+        btn.MouseButton1Click:Connect(function()
+            state = not state
+            btn.BackgroundColor3 = state and Color3.fromRGB(30, 150, 90) or Color3.fromRGB(50, 52, 72)
+            btn.Text = "   " .. text .. (state and "   [AÇIK]" or "   [KAPALI]")
+            callback(state)
+        end)
+        return btn
+    end
 
-local speedSlider = Instance.new("TextButton")
-speedSlider.Size = UDim2.new(1, 0, 0, 25)
-speedSlider.BackgroundColor3 = Color3.fromRGB(60, 60, 80)
-speedSlider.Text = "  Hızı Artır"
-speedSlider.TextColor3 = Color3.new(1, 1, 1)
-speedSlider.Font = Enum.Font.Gotham
-speedSlider.TextSize = 13
-speedSlider.Parent = ScrollFrame
+    local function ActionButton(text, color, callback)
+        local btn = Instance.new("TextButton")
+        btn.Size = UDim2.new(1, 0, 0, 34)
+        btn.BackgroundColor3 = color or Color3.fromRGB(80, 80, 110)
+        btn.Text = "   " .. text
+        btn.TextColor3 = Color3.new(1, 1, 1)
+        btn.Font = Enum.Font.GothamBold
+        btn.TextSize = 13
+        btn.TextXAlignment = Enum.TextXAlignment.Left
+        btn.Parent = scroll
+        Instance.new("UICorner", btn).CornerRadius = UDim.new(0, 6)
+        btn.MouseButton1Click:Connect(callback)
+        return btn
+    end
 
-local speedSliderCorner = Instance.new("UICorner")
-speedSliderCorner.CornerRadius = UDim.new(0, 6)
-speedSliderCorner.Parent = speedSlider
+    local function miniBtn(parent, txt, cb, isFull)
+        local b = Instance.new("TextButton")
+        b.Size = isFull and UDim2.new(1, 0, 1, 0) or UDim2.new(0.5, -3, 1, 0)
+        b.BackgroundColor3 = Color3.fromRGB(60, 62, 90)
+        b.Text = txt
+        b.TextColor3 = Color3.new(1, 1, 1)
+        b.Font = Enum.Font.GothamBold
+        b.TextSize = 13
+        b.Parent = parent
+        Instance.new("UICorner", b).CornerRadius = UDim.new(0, 6)
+        b.MouseButton1Click:Connect(cb)
+    end
 
-speedSlider.MouseButton1Click:Connect(function()
-    Config.Movement.WalkSpeed = math.min(Config.Movement.WalkSpeed + 10, 100)
-    speedLabel.Text = "  WalkSpeed: " .. Config.Movement.WalkSpeed
-    UpdateWalkSpeed()
-end)
+    -- ============ ESP ============
+    SectionLabel("🎯 ESP")
+    ToggleButton("ESP Aç/Kapat", Config.ESP.Enabled, function(v) Config.ESP.Enabled = v end)
+    ToggleButton("Tracers (Çizgi)", Config.ESP.ShowTracers, function(v) Config.ESP.ShowTracers = v end)
+    ToggleButton("Düşen Silah ESP", Config.ESP.ShowGunDrop, function(v) Config.ESP.ShowGunDrop = v end)
 
--- Fling butonu
-local flingBtn = Instance.new("TextButton")
-flingBtn.Size = UDim2.new(1, 0, 0, 35)
-flingBtn.BackgroundColor3 = Color3.fromRGB(200, 50, 50)
-flingBtn.Text = "  Hedefi Fırlat (Fling)"
-flingBtn.TextColor3 = Color3.new(1, 1, 1)
-flingBtn.Font = Enum.Font.GothamBold
-flingBtn.TextSize = 14
-flingBtn.Parent = ScrollFrame
+    -- ============ COMBAT ============
+    SectionLabel("⚔️ COMBAT")
+    ToggleButton("Silah Silent Aim (Katili vur)", Config.SilentAim.GunEnabled,
+        function(v)
+            Config.SilentAim.GunEnabled = v
+            if FireButton then FireButton.Visible = v end
+        end)
+    ToggleButton("Bıçak Silent Aim", Config.SilentAim.KnifeEnabled,
+        function(v) Config.SilentAim.KnifeEnabled = v end)
+    ToggleButton("Auto Kill (Katil - Otomatik Avla)", Config.SilentAim.AutoKill,
+        function(v) Config.SilentAim.AutoKill = v end)
+    ToggleButton("Headshot", Config.SilentAim.Headshot, function(v) Config.SilentAim.Headshot = v end)
 
-local flingCorner = Instance.new("UICorner")
-flingCorner.CornerRadius = UDim.new(0, 8)
-flingCorner.Parent = flingBtn
+    -- FOV
+    local fovLabel = Instance.new("TextLabel")
+    fovLabel.Size = UDim2.new(1, 0, 0, 24)
+    fovLabel.BackgroundTransparency = 1
+    fovLabel.Text = "   FOV: " .. Config.SilentAim.FOV .. "°"
+    fovLabel.TextColor3 = Color3.fromRGB(200, 200, 220)
+    fovLabel.Font = Enum.Font.Gotham
+    fovLabel.TextSize = 12
+    fovLabel.TextXAlignment = Enum.TextXAlignment.Left
+    fovLabel.Parent = scroll
 
-flingBtn.MouseButton1Click:Connect(function()
-    -- En yakın oyuncuyu hedef al
-    local closest = nil
-    local shortestDist = math.huge
-    local myRoot = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
-    if myRoot then
-        for _, player in pairs(Players:GetPlayers()) do
-            if player ~= LocalPlayer and player.Character then
-                local root = player.Character:FindFirstChild("HumanoidRootPart")
-                if root then
-                    local dist = (root.Position - myRoot.Position).Magnitude
-                    if dist < shortestDist then
-                        shortestDist = dist
-                        closest = player
+    local fovRow = Instance.new("Frame")
+    fovRow.Size = UDim2.new(1, 0, 0, 30)
+    fovRow.BackgroundTransparency = 1
+    fovRow.Parent = scroll
+    local fovL = Instance.new("UIListLayout", fovRow)
+    fovL.FillDirection = Enum.FillDirection.Horizontal
+    fovL.Padding = UDim.new(0, 6)
+    miniBtn(fovRow, "  -10", function()
+        Config.SilentAim.FOV = math.max(20, Config.SilentAim.FOV - 10)
+        fovLabel.Text = "   FOV: " .. Config.SilentAim.FOV .. "°"
+    end)
+    miniBtn(fovRow, "  +10", function()
+        Config.SilentAim.FOV = math.min(360, Config.SilentAim.FOV + 10)
+        fovLabel.Text = "   FOV: " .. Config.SilentAim.FOV .. "°"
+    end)
+
+    -- AutoKill Range
+    local akLabel = Instance.new("TextLabel")
+    akLabel.Size = UDim2.new(1, 0, 0, 24)
+    akLabel.BackgroundTransparency = 1
+    akLabel.Text = "   AutoKill Menzil: " .. Config.SilentAim.AutoKillRange .. " stud"
+    akLabel.TextColor3 = Color3.fromRGB(200, 200, 220)
+    akLabel.Font = Enum.Font.Gotham
+    akLabel.TextSize = 12
+    akLabel.TextXAlignment = Enum.TextXAlignment.Left
+    akLabel.Parent = scroll
+
+    local akRow = Instance.new("Frame")
+    akRow.Size = UDim2.new(1, 0, 0, 30)
+    akRow.BackgroundTransparency = 1
+    akRow.Parent = scroll
+    local akL = Instance.new("UIListLayout", akRow)
+    akL.FillDirection = Enum.FillDirection.Horizontal
+    akL.Padding = UDim.new(0, 6)
+    miniBtn(akRow, "  -5", function()
+        Config.SilentAim.AutoKillRange = math.max(5, Config.SilentAim.AutoKillRange - 5)
+        akLabel.Text = "   AutoKill Menzil: " .. Config.SilentAim.AutoKillRange .. " stud"
+    end)
+    miniBtn(akRow, "  +5", function()
+        Config.SilentAim.AutoKillRange = math.min(150, Config.SilentAim.AutoKillRange + 5)
+        akLabel.Text = "   AutoKill Menzil: " .. Config.SilentAim.AutoKillRange .. " stud"
+    end)
+
+    -- ============ MOVEMENT ============
+    SectionLabel("🏃 HAREKET")
+    ToggleButton("Bunny Hop", Config.Movement.BunnyHop, function(v) Config.Movement.BunnyHop = v end)
+    ToggleButton("SpinBot", Config.Movement.SpinBot, function(v) Config.Movement.SpinBot = v end)
+
+    local spinLabel = Instance.new("TextLabel")
+    spinLabel.Size = UDim2.new(1, 0, 0, 24)
+    spinLabel.BackgroundTransparency = 1
+    spinLabel.Text = "   Spin Hızı: " .. Config.Movement.SpinSpeed .. "°/sn"
+    spinLabel.TextColor3 = Color3.fromRGB(200, 200, 220)
+    spinLabel.Font = Enum.Font.Gotham
+    spinLabel.TextSize = 12
+    spinLabel.TextXAlignment = Enum.TextXAlignment.Left
+    spinLabel.Parent = scroll
+
+    local spinRow = Instance.new("Frame")
+    spinRow.Size = UDim2.new(1, 0, 0, 30)
+    spinRow.BackgroundTransparency = 1
+    spinRow.Parent = scroll
+    local sLay = Instance.new("UIListLayout", spinRow)
+    sLay.FillDirection = Enum.FillDirection.Horizontal
+    sLay.Padding = UDim.new(0, 6)
+    miniBtn(spinRow, "  Yavaş", function()
+        Config.Movement.SpinSpeed = math.max(60, Config.Movement.SpinSpeed - 100)
+        spinLabel.Text = "   Spin Hızı: " .. Config.Movement.SpinSpeed .. "°/sn"
+    end)
+    miniBtn(spinRow, "  Hızlı", function()
+        Config.Movement.SpinSpeed = math.min(3000, Config.Movement.SpinSpeed + 100)
+        spinLabel.Text = "   Spin Hızı: " .. Config.Movement.SpinSpeed .. "°/sn"
+    end)
+
+    local wsLabel = Instance.new("TextLabel")
+    wsLabel.Size = UDim2.new(1, 0, 0, 24)
+    wsLabel.BackgroundTransparency = 1
+    wsLabel.Text = "   WalkSpeed: " .. Config.Movement.WalkSpeed
+    wsLabel.TextColor3 = Color3.fromRGB(200, 200, 220)
+    wsLabel.Font = Enum.Font.Gotham
+    wsLabel.TextSize = 12
+    wsLabel.TextXAlignment = Enum.TextXAlignment.Left
+    wsLabel.Parent = scroll
+
+    local wsRow = Instance.new("Frame")
+    wsRow.Size = UDim2.new(1, 0, 0, 30)
+    wsRow.BackgroundTransparency = 1
+    wsRow.Parent = scroll
+    local wLay = Instance.new("UIListLayout", wsRow)
+    wLay.FillDirection = Enum.FillDirection.Horizontal
+    wLay.Padding = UDim.new(0, 6)
+    miniBtn(wsRow, "  -5", function()
+        Config.Movement.WalkSpeed = math.max(8, Config.Movement.WalkSpeed - 5)
+        wsLabel.Text = "   WalkSpeed: " .. Config.Movement.WalkSpeed
+        ApplyWalkSpeed()
+    end)
+    miniBtn(wsRow, "  +5", function()
+        Config.Movement.WalkSpeed = math.min(200, Config.Movement.WalkSpeed + 5)
+        wsLabel.Text = "   WalkSpeed: " .. Config.Movement.WalkSpeed
+        ApplyWalkSpeed()
+    end)
+
+    -- ============ FARM ============
+    SectionLabel("💰 FARM")
+    ToggleButton("Auto Coin Farm", Config.Farm.AutoCoin, function(v) Config.Farm.AutoCoin = v end)
+
+    -- ============ FLING ============
+    SectionLabel("💥 FLING — Hedef Seç")
+    local flingList = Instance.new("Frame")
+    flingList.Size = UDim2.new(1, 0, 0, 200)
+    flingList.BackgroundColor3 = Color3.fromRGB(32, 32, 44)
+    flingList.BorderSizePixel = 0
+    flingList.Parent = scroll
+    Instance.new("UICorner", flingList).CornerRadius = UDim.new(0, 8)
+
+    local flingScroll = Instance.new("ScrollingFrame")
+    flingScroll.Size = UDim2.new(1, -8, 1, -8)
+    flingScroll.Position = UDim2.new(0, 4, 0, 4)
+    flingScroll.BackgroundTransparency = 1
+    flingScroll.BorderSizePixel = 0
+    flingScroll.ScrollBarThickness = 4
+    flingScroll.CanvasSize = UDim2.new(0, 0, 0, 0)
+    flingScroll.AutomaticCanvasSize = Enum.AutomaticSize.Y
+    flingScroll.Parent = flingList
+    local flLay = Instance.new("UIListLayout", flingScroll)
+    flLay.Padding = UDim.new(0, 4)
+    flLay.SortOrder = Enum.SortOrder.LayoutOrder
+
+    local function RefreshFlingList()
+        for _, c in ipairs(flingScroll:GetChildren()) do
+            if c:IsA("TextButton") then c:Destroy() end
+        end
+        for _, plr in ipairs(Players:GetPlayers()) do
+            if plr == LocalPlayer then continue end
+            local role = GetRole(plr)
+            local b = Instance.new("TextButton")
+            b.Size = UDim2.new(1, 0, 0, 30)
+            b.BackgroundColor3 = Color3.fromRGB(60, 60, 84)
+            b.Text = "   " .. plr.Name .. "  [" .. role .. "]"
+            b.TextColor3 = RoleColor(role)
+            b.Font = Enum.Font.GothamBold
+            b.TextSize = 13
+            b.TextXAlignment = Enum.TextXAlignment.Left
+            b.Parent = flingScroll
+            Instance.new("UICorner", b).CornerRadius = UDim.new(0, 6)
+            b.MouseButton1Click:Connect(function()
+                pcall(function()
+                    b.Text = "   ✓ " .. plr.Name .. " fırlatıldı!"
+                    b.BackgroundColor3 = Color3.fromRGB(150, 40, 40)
+                end)
+                task.spawn(function()
+                    FlingPlayer(plr)
+                    task.wait(1)
+                    if b.Parent then
+                        b.Text = "   " .. plr.Name .. "  [" .. GetRole(plr) .. "]"
+                        b.BackgroundColor3 = Color3.fromRGB(60, 60, 84)
                     end
+                end)
+            end)
+        end
+    end
+    RefreshFlingList()
+    Threads[#Threads+1] = task.spawn(function()
+        while task.wait(2) do pcall(RefreshFlingList) end
+    end)
+
+    -- ============ DİĞER ============
+    SectionLabel("🛠️ DİĞER")
+    ToggleButton("Anti-AFK", Config.Misc.AntiAFK, function(v) Config.Misc.AntiAFK = v end)
+
+    ActionButton("🔄 Karakteri Sıfırla", Color3.fromRGB(180, 60, 60), function()
+        pcall(function() LocalPlayer.Character:BreakJoints() end)
+    end)
+    ActionButton("✖ Menüyü Gizle", Color3.fromRGB(60, 60, 90), function()
+        main.Visible = false
+    end)
+
+    closeBtn.MouseButton1Click:Connect(function() main.Visible = false end)
+
+    -- ============ REOPEN FLOATING BUTTON ============
+    local reopen = Instance.new("TextButton")
+    reopen.Size = UDim2.new(0, 48, 0, 48)
+    reopen.Position = UDim2.new(0, 12, 0.5, -24)
+    reopen.BackgroundColor3 = Color3.fromRGB(80, 90, 220)
+    reopen.Text = "🔪"
+    reopen.TextColor3 = Color3.new(1, 1, 1)
+    reopen.Font = Enum.Font.GothamBold
+    reopen.TextSize = 22
+    reopen.Parent = gui
+    Instance.new("UICorner", reopen).CornerRadius = UDim.new(1, 0)
+
+    local rDrag, rStart, rPos
+    reopen.InputBegan:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1
+           or input.UserInputType == Enum.UserInputType.Touch then
+            rDrag = true; rStart = input.Position; rPos = reopen.Position
+            input.Changed:Connect(function()
+                if input.UserInputState == Enum.UserInputState.End then rDrag = false end
+            end)
+        end
+    end)
+    reopen.InputChanged:Connect(function(input)
+        if rDrag and (input.UserInputType == Enum.UserInputType.MouseMovement
+           or input.UserInputType == Enum.UserInputType.Touch) then
+            local d = input.Position - rStart
+            reopen.Position = UDim2.new(rPos.X.Scale, rPos.X.Offset + d.X,
+                                         rPos.Y.Scale, rPos.Y.Offset + d.Y)
+        end
+    end)
+    reopen.MouseButton1Click:Connect(function() main.Visible = not main.Visible end)
+
+    -- ============ ATEŞ BUTONU (Silah Silent Aim) ============
+    local fireBtn = Instance.new("TextButton")
+    fireBtn.Name = "FireButton"
+    fireBtn.Size = UDim2.new(0, 150, 0, 70)
+    fireBtn.Position = UDim2.new(1, -170, 1, -110)
+    fireBtn.BackgroundColor3 = Color3.fromRGB(200, 50, 50)
+    fireBtn.BackgroundTransparency = 0.15
+    fireBtn.Text = "🔥 ATEŞ"
+    fireBtn.TextColor3 = Color3.new(1, 1, 1)
+    fireBtn.Font = Enum.Font.GothamBold
+    fireBtn.TextSize = 20
+    fireBtn.Visible = Config.SilentAim.GunEnabled
+    fireBtn.Active = true
+    fireBtn.Parent = gui
+    Instance.new("UICorner", fireBtn).CornerRadius = UDim.new(0, 14)
+
+    local fStroke = Instance.new("UIStroke")
+    fStroke.Color = Color3.fromRGB(255, 200, 200)
+    fStroke.Thickness = 2
+    fStroke.Transparency = 0.4
+    fStroke.Parent = fireBtn
+
+    FireButton = fireBtn
+
+    -- Sürükleme
+    local fDrag, fStart, fPos
+    fireBtn.InputBegan:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1
+           or input.UserInputType == Enum.UserInputType.Touch then
+            fDrag = true; fStart = input.Position; fPos = fireBtn.Position
+            input.Changed:Connect(function()
+                if input.UserInputState == Enum.UserInputState.End then
+                    fDrag = false
+                    FireHeld = false
+                    fireBtn.BackgroundColor3 = Color3.fromRGB(200, 50, 50)
                 end
+            end)
+        end
+    end)
+    fireBtn.InputChanged:Connect(function(input)
+        if fDrag and (input.UserInputType == Enum.UserInputType.MouseMovement
+           or input.UserInputType == Enum.UserInputType.Touch) then
+            local d = input.Position - fStart
+            -- Sadece belirgin sürüklemede hareket ettir (küçük hareketleri yut)
+            if math.abs(d.X) > 6 or math.abs(d.Y) > 6 then
+                fireBtn.Position = UDim2.new(fPos.X.Scale, fPos.X.Offset + d.X,
+                                              fPos.Y.Scale, fPos.Y.Offset + d.Y)
             end
         end
-    end
-    if closest then
-        Config.Misc.FlingTarget = closest
-    end
-end)
+    end)
+
+    -- Basılı tutunca ateş et
+    fireBtn.MouseButton1Down:Connect(function()
+        FireHeld = true
+        fireBtn.BackgroundColor3 = Color3.fromRGB(255, 100, 100)
+        -- İlk ateş hemen
+        TryAutoFire()
+    end)
+    fireBtn.MouseButton1Up:Connect(function()
+        FireHeld = false
+        fireBtn.BackgroundColor3 = Color3.fromRGB(200, 50, 50)
+    end)
+    -- Touch için
+    fireBtn.TouchLongPress:Connect(function() FireHeld = true end)
+    fireBtn.MouseLeave:Connect(function()
+        FireHeld = false
+        fireBtn.BackgroundColor3 = Color3.fromRGB(200, 50, 50)
+    end)
+end
 
 -- ============================================================
--- SCRIPT SONU
+-- BAŞLAT
 -- ============================================================
-print("✅ MM2 Ultimate Script başarıyla yüklendi!")
-print("📌 GitHub'dan loadstring ile çalıştırıldı.")
+SetupSilentAim()
+SetupAntiAFK()
+ApplyWalkSpeed()
+
+Threads[#Threads+1] = task.spawn(ESPUpdateLoop)
+Threads[#Threads+1] = task.spawn(KnifeAutoKillLoop)
+Threads[#Threads+1] = task.spawn(AutoFarmLoop)
+Threads[#Threads+1] = task.spawn(BunnyHopLoop)
+Threads[#Threads+1] = task.spawn(SpinBotLoop)
+Threads[#Threads+1] = task.spawn(AutoFireLoop)
+
+pcall(BuildUI)
+
+print("✅ MM2 Ultimate v3 yüklendi!")
+print("🔥 Silah Silent Aim açıkken ekranda ATEŞ butonu belirir (sürüklenebilir).")
+print("⚔️ Auto Kill: katil rolündeyken görüş açındaki oyuncuları otomatik avlar.")
+print("📌 Sol taraftaki 🔪 butonundan menüyü aç/kapat.")
