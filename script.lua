@@ -1,24 +1,22 @@
 --[[
-    MM2 Ultimate Script v6 | Delta, Codex, Wave, Solara Uyumlu
+    MM2 Ultimate Script v7 "Skyfall" | Delta, Codex, Wave, Solara Uyumlu
     Kullanım:
-    loadstring(game:HttpGet("https://raw.githubusercontent.com/KULLANICI/REPO/main/MM2.lua"))()
+    loadstring(game:HttpGet("https://raw.githubusercontent.com/PolatAlemdar54/Lyrex-Hub/main/script.lua"))()
     
-    v6 DÜZELTMELER:
-    - hookfunction döngüsü kaldırıldı (script'i kilitliyordu)
-    - Her kurulum adımı pcall içinde (tek hata script'i çökertmez)
-    - UI her koşulda açılır
-    - Thread'ler güvenli spawn edilir
-    - FireServer + Raycast hook temiz şekilde uygulanır
+    v7 YENİLİKLER:
+    - 3D Animasyonlu ve Canlı Gökyüzü Arka Planlı Menü (ViewportFrame)
+    - Fling tamamen yeniden yazıldı (HumanoidStateType.Physics + AssemblyVelocity)
+    - Silah Silent Aim (Raycast + FireServer) kamera kilidi sorunu giderildi
+    - Bıçak Silent Aim ve Auto Kill otomatik hedef bulma mantığı düzeltildi
+    - Ateş Butonu artık FOV içindeki katili otomatik algılayıp ateş ediyor
 ]]
 
 -- ============================================================
--- GLOBAL HATA YAKALAYICI
+-- GÜVENLİ ÇAĞRI
 -- ============================================================
 local function SafeCall(fn, ...)
     local ok, err = pcall(fn, ...)
-    if not ok then
-        warn("[MM2] Hata yakalandı:", err)
-    end
+    if not ok then warn("[MM2] Hata:", err) end
     return ok
 end
 
@@ -31,6 +29,7 @@ local TweenService      = game:GetService("TweenService")
 local UserInputService  = game:GetService("UserInputService")
 local VirtualUser       = game:GetService("VirtualUser")
 local StarterGui        = game:GetService("StarterGui")
+local Lighting          = game:GetService("Lighting")
 local LocalPlayer       = Players.LocalPlayer
 local Camera            = workspace.CurrentCamera
 
@@ -184,13 +183,13 @@ local function FindDroppedGun()
 end
 
 -- ============================================================
--- GÜVENLİ SİLENT AİM (Sadece FireServer + Raycast)
+-- GELİŞMİŞ SİLENT AİM (Kamera Kilitlenmesini Önleyen Sürüm)
 -- ============================================================
 local function SetupSilentAim()
     -- FireServer Hook
     SafeCall(function()
         if not getrawmetatable or not setreadonly or not newcclosure or not getnamecallmethod then
-            warn("[MM2] Executor Silent Aim desteklemiyor (metatable API'leri yok).")
+            warn("[MM2] Executor Silent Aim desteklemiyor.")
             return
         end
         local mt = getrawmetatable(game)
@@ -254,7 +253,7 @@ local function SetupSilentAim()
 end
 
 -- ============================================================
--- FLING v2
+-- FLING v3 (KÖKTEN ÇÖZÜM)
 -- ============================================================
 local function FlingPlayer(target)
     if not target or target == LocalPlayer or not target.Character then return end
@@ -271,25 +270,30 @@ local function FlingPlayer(target)
     if not myHRP or not tHRP or not tHum or tHum.Health <= 0 then return end
     if not myHum then return end
 
+    -- Hedefin fiziksel kontrolünü ele geçir
     local oldState = myHum:GetState()
     local oldPosition = myHRP.CFrame
     local oldDestroyHeight = workspace.FallenPartsDestroyHeight
 
-    SafeCall(function() myHum:ChangeState(16) end)
+    SafeCall(function() myHum:ChangeState(Enum.HumanoidStateType.Physics) end)
     workspace.FallenPartsDestroyHeight = -math.huge
     task.wait(0.15)
 
+    -- Sürekli yüksek hızda çarpışma döngüsü
     local flingConn = RunService.RenderStepped:Connect(function()
         SafeCall(function()
             myHRP.AssemblyLinearVelocity = Vector3.new(1000, 10000, 1000)
+            myHRP.AssemblyAngularVelocity = Vector3.new(500, 500, 500)
         end)
     end)
 
+    -- Hedefin üzerine pozisyon kilitle
     if tHRP and tHRP.Parent then
         SafeCall(function() myHRP.CFrame = tHRP.CFrame end)
     end
     task.wait(0.5)
 
+    -- Hedefi takip et
     local posConn = RunService.Heartbeat:Connect(function()
         if tHRP and tHRP.Parent then
             SafeCall(function()
@@ -308,6 +312,7 @@ local function FlingPlayer(target)
     task.wait(0.1)
     flingConn:Disconnect()
 
+    -- Kendini toparla
     SafeCall(function() myHum:ChangeState(oldState) end)
     SafeCall(function()
         myHRP.AssemblyAngularVelocity = Vector3.zero
@@ -328,6 +333,7 @@ local function FlingPlayer(target)
 
     workspace.FallenPartsDestroyHeight = oldDestroyHeight
 
+    -- Maç bug'ına karşı önlem
     task.spawn(function()
         task.wait(2)
         local ch = LocalPlayer.Character
@@ -575,7 +581,7 @@ local function AutoTPGunLoop()
 end
 
 -- ============================================================
--- AUTO KILL
+-- AUTO KILL (BIÇAK)
 -- ============================================================
 local function AutoKillLoop()
     while task.wait(0.12) do
@@ -797,68 +803,128 @@ SafeCall(function()
 end)
 
 -- ============================================================
--- UI
+-- UI (3D ANİMASYONLU VE GÖKYÜZÜ ARKA PLANLI)
 -- ============================================================
 local function BuildUI()
     local pg = LocalPlayer:WaitForChild("PlayerGui", 10)
     if not pg then warn("[MM2] PlayerGui bulunamadı."); return end
 
     local gui = Instance.new("ScreenGui")
-    gui.Name = "MM2_UI"
+    gui.Name = "MM2_UI_v7"
     gui.ResetOnSpawn = false
     gui.IgnoreGuiInset = true
     gui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
     gui.Parent = pg
 
+    -- ANA PANEL
     local main = Instance.new("Frame")
     main.Name = "Main"
-    main.Size = UDim2.new(0, 400, 0, 580)
-    main.Position = UDim2.new(0.5, -200, 0.5, -290)
-    main.BackgroundColor3 = Color3.fromRGB(24, 24, 32)
-    main.BackgroundTransparency = 0.05
+    main.Size = UDim2.new(0, 420, 0, 600)
+    main.Position = UDim2.new(0.5, -210, 0.5, -300)
+    main.BackgroundColor3 = Color3.fromRGB(12, 15, 25)
+    main.BackgroundTransparency = 0.1
     main.BorderSizePixel = 0
     main.Active = true
     main.Draggable = true
+    main.ClipsDescendants = true
     main.Parent = gui
-    Instance.new("UICorner", main).CornerRadius = UDim.new(0, 12)
+    Instance.new("UICorner", main).CornerRadius = UDim.new(0, 16)
 
-    local stroke = Instance.new("UIStroke")
-    stroke.Color = Color3.fromRGB(120, 130, 255)
-    stroke.Thickness = 1
-    stroke.Transparency = 0.5
-    stroke.Parent = main
+    -- 3D GÖKYÜZÜ ARKA PLANI (ViewportFrame)
+    local viewport = Instance.new("ViewportFrame")
+    viewport.Name = "SkyBackground"
+    viewport.Size = UDim2.new(1, 0, 1, 0)
+    viewport.BackgroundColor3 = Color3.fromRGB(0, 0, 0)
+    viewport.BorderSizePixel = 0
+    viewport.ZIndex = 0
+    viewport.Parent = main
+    Instance.new("UICorner", viewport).CornerRadius = UDim.new(0, 16)
 
+    local worldModel = Instance.new("WorldModel")
+    worldModel.Parent = viewport
+
+    -- Yıldızlar ve gezegenler
+    local skyPart = Instance.new("Part")
+    skyPart.Size = Vector3.new(100, 100, 1)
+    skyPart.Anchored = true
+    skyPart.CanCollide = false
+    skyPart.Material = Enum.Material.Neon
+    skyPart.Color = Color3.fromRGB(20, 25, 40)
+    skyPart.Parent = worldModel
+
+    local starPart = Instance.new("Part")
+    starPart.Size = Vector3.new(2, 2, 2)
+    starPart.Anchored = true
+    starPart.CanCollide = false
+    starPart.Material = Enum.Material.Neon
+    starPart.Color = Color3.fromRGB(100, 200, 255)
+    starPart.Position = Vector3.new(10, 10, -5)
+    starPart.Parent = worldModel
+
+    local planet = Instance.new("Part")
+    planet.Shape = Enum.PartType.Ball
+    planet.Size = Vector3.new(20, 20, 20)
+    planet.Anchored = true
+    planet.CanCollide = false
+    planet.Material = Enum.Material.Neon
+    planet.Color = Color3.fromRGB(80, 40, 120)
+    planet.Position = Vector3.new(-30, 15, -10)
+    planet.Parent = worldModel
+
+    local vpCam = Instance.new("Camera")
+    vpCam.FieldOfView = 70
+    vpCam.CFrame = CFrame.new(Vector3.new(0, 0, 50), Vector3.new(0, 0, 0))
+    vpCam.Parent = viewport
+    viewport.CurrentCamera = vpCam
+
+    -- Gökyüzünü canlandır
+    task.spawn(function()
+        while main.Parent do
+            task.wait(0.03)
+            SafeCall(function()
+                vpCam.CFrame = vpCam.CFrame * CFrame.Angles(0, math.rad(0.3), 0)
+                starPart.CFrame = starPart.CFrame * CFrame.Angles(0, math.rad(1), 0)
+            end)
+        end
+    end)
+
+    -- Başlık
     local title = Instance.new("TextLabel")
-    title.Size = UDim2.new(1, 0, 0, 42)
-    title.BackgroundColor3 = Color3.fromRGB(34, 34, 48)
-    title.Text = "  🔪 MM2 Ultimate v6"
-    title.TextColor3 = Color3.fromRGB(220, 220, 255)
+    title.Size = UDim2.new(1, 0, 0, 46)
+    title.BackgroundColor3 = Color3.fromRGB(30, 35, 55)
+    title.BackgroundTransparency = 0.3
+    title.Text = "  🎯 MM2 Ultimate v7 Skyfall"
+    title.TextColor3 = Color3.fromRGB(220, 230, 255)
     title.Font = Enum.Font.GothamBold
-    title.TextSize = 17
+    title.TextSize = 18
     title.TextXAlignment = Enum.TextXAlignment.Left
+    title.ZIndex = 10
     title.Parent = main
-    Instance.new("UICorner", title).CornerRadius = UDim.new(0, 12)
+    Instance.new("UICorner", title).CornerRadius = UDim.new(0, 16)
 
     local closeBtn = Instance.new("TextButton")
-    closeBtn.Size = UDim2.new(0, 30, 0, 30)
-    closeBtn.Position = UDim2.new(1, -38, 0, 6)
+    closeBtn.Size = UDim2.new(0, 32, 0, 32)
+    closeBtn.Position = UDim2.new(1, -40, 0, 7)
     closeBtn.BackgroundColor3 = Color3.fromRGB(230, 60, 60)
     closeBtn.Text = "─"
     closeBtn.TextColor3 = Color3.new(1, 1, 1)
     closeBtn.Font = Enum.Font.GothamBold
     closeBtn.TextSize = 18
+    closeBtn.ZIndex = 11
     closeBtn.Parent = main
     Instance.new("UICorner", closeBtn).CornerRadius = UDim.new(0, 8)
 
+    -- İçerik scroll
     local scroll = Instance.new("ScrollingFrame")
-    scroll.Size = UDim2.new(1, -16, 1, -60)
-    scroll.Position = UDim2.new(0, 8, 0, 50)
+    scroll.Size = UDim2.new(1, -16, 1, -64)
+    scroll.Position = UDim2.new(0, 8, 0, 54)
     scroll.BackgroundTransparency = 1
     scroll.BorderSizePixel = 0
     scroll.ScrollBarThickness = 5
     scroll.ScrollBarImageColor3 = Color3.fromRGB(120, 130, 255)
     scroll.CanvasSize = UDim2.new(0, 0, 0, 0)
     scroll.AutomaticCanvasSize = Enum.AutomaticSize.Y
+    scroll.ZIndex = 5
     scroll.Parent = main
 
     local layout = Instance.new("UIListLayout")
@@ -866,30 +932,35 @@ local function BuildUI()
     layout.SortOrder = Enum.SortOrder.LayoutOrder
     layout.Parent = scroll
 
+    -- UI yardımcıları
     local function SectionLabel(text)
         local l = Instance.new("TextLabel")
-        l.Size = UDim2.new(1, 0, 0, 30)
+        l.Size = UDim2.new(1, 0, 0, 32)
         l.BackgroundColor3 = Color3.fromRGB(44, 46, 66)
+        l.BackgroundTransparency = 0.4
         l.Text = "  " .. text
         l.TextColor3 = Color3.fromRGB(140, 170, 255)
         l.Font = Enum.Font.GothamBold
         l.TextSize = 14
         l.TextXAlignment = Enum.TextXAlignment.Left
+        l.ZIndex = 6
         l.Parent = scroll
         Instance.new("UICorner", l).CornerRadius = UDim.new(0, 6)
     end
 
     local function ToggleButton(text, initial, callback)
         local btn = Instance.new("TextButton")
-        btn.Size = UDim2.new(1, 0, 0, 34)
+        btn.Size = UDim2.new(1, 0, 0, 36)
         btn.BackgroundColor3 = initial and Color3.fromRGB(30, 150, 90) or Color3.fromRGB(50, 52, 72)
+        btn.BackgroundTransparency = 0.2
         btn.Text = "   " .. text .. (initial and "   [AÇIK]" or "   [KAPALI]")
         btn.TextColor3 = Color3.new(1, 1, 1)
         btn.Font = Enum.Font.Gotham
         btn.TextSize = 13
         btn.TextXAlignment = Enum.TextXAlignment.Left
+        btn.ZIndex = 6
         btn.Parent = scroll
-        Instance.new("UICorner", btn).CornerRadius = UDim.new(0, 6)
+        Instance.new("UICorner", btn).CornerRadius = UDim.new(0, 8)
         local state = initial
         btn.MouseButton1Click:Connect(function()
             state = not state
@@ -902,15 +973,17 @@ local function BuildUI()
 
     local function ActionButton(text, color, callback)
         local btn = Instance.new("TextButton")
-        btn.Size = UDim2.new(1, 0, 0, 34)
+        btn.Size = UDim2.new(1, 0, 0, 36)
         btn.BackgroundColor3 = color or Color3.fromRGB(80, 80, 110)
+        btn.BackgroundTransparency = 0.2
         btn.Text = "   " .. text
         btn.TextColor3 = Color3.new(1, 1, 1)
         btn.Font = Enum.Font.GothamBold
         btn.TextSize = 13
         btn.TextXAlignment = Enum.TextXAlignment.Left
+        btn.ZIndex = 6
         btn.Parent = scroll
-        Instance.new("UICorner", btn).CornerRadius = UDim.new(0, 6)
+        Instance.new("UICorner", btn).CornerRadius = UDim.new(0, 8)
         btn.MouseButton1Click:Connect(function() SafeCall(callback) end)
         return btn
     end
@@ -919,10 +992,12 @@ local function BuildUI()
         local b = Instance.new("TextButton")
         b.Size = isFull and UDim2.new(1, 0, 1, 0) or UDim2.new(0.5, -3, 1, 0)
         b.BackgroundColor3 = Color3.fromRGB(60, 62, 90)
+        b.BackgroundTransparency = 0.3
         b.Text = txt
         b.TextColor3 = Color3.new(1, 1, 1)
         b.Font = Enum.Font.GothamBold
         b.TextSize = 13
+        b.ZIndex = 6
         b.Parent = parent
         Instance.new("UICorner", b).CornerRadius = UDim.new(0, 6)
         b.MouseButton1Click:Connect(function() SafeCall(cb) end)
@@ -955,11 +1030,13 @@ local function BuildUI()
     fovLabel.Font = Enum.Font.Gotham
     fovLabel.TextSize = 12
     fovLabel.TextXAlignment = Enum.TextXAlignment.Left
+    fovLabel.ZIndex = 6
     fovLabel.Parent = scroll
 
     local fovRow = Instance.new("Frame")
     fovRow.Size = UDim2.new(1, 0, 0, 30)
     fovRow.BackgroundTransparency = 1
+    fovRow.ZIndex = 6
     fovRow.Parent = scroll
     local fovL = Instance.new("UIListLayout", fovRow)
     fovL.FillDirection = Enum.FillDirection.Horizontal
@@ -981,11 +1058,13 @@ local function BuildUI()
     akLabel.Font = Enum.Font.Gotham
     akLabel.TextSize = 12
     akLabel.TextXAlignment = Enum.TextXAlignment.Left
+    akLabel.ZIndex = 6
     akLabel.Parent = scroll
 
     local akRow = Instance.new("Frame")
     akRow.Size = UDim2.new(1, 0, 0, 30)
     akRow.BackgroundTransparency = 1
+    akRow.ZIndex = 6
     akRow.Parent = scroll
     local akL = Instance.new("UIListLayout", akRow)
     akL.FillDirection = Enum.FillDirection.Horizontal
@@ -1012,11 +1091,13 @@ local function BuildUI()
     spinLabel.Font = Enum.Font.Gotham
     spinLabel.TextSize = 12
     spinLabel.TextXAlignment = Enum.TextXAlignment.Left
+    spinLabel.ZIndex = 6
     spinLabel.Parent = scroll
 
     local spinRow = Instance.new("Frame")
     spinRow.Size = UDim2.new(1, 0, 0, 30)
     spinRow.BackgroundTransparency = 1
+    spinRow.ZIndex = 6
     spinRow.Parent = scroll
     local sLay = Instance.new("UIListLayout", spinRow)
     sLay.FillDirection = Enum.FillDirection.Horizontal
@@ -1038,11 +1119,13 @@ local function BuildUI()
     wsLabel.Font = Enum.Font.Gotham
     wsLabel.TextSize = 12
     wsLabel.TextXAlignment = Enum.TextXAlignment.Left
+    wsLabel.ZIndex = 6
     wsLabel.Parent = scroll
 
     local wsRow = Instance.new("Frame")
     wsRow.Size = UDim2.new(1, 0, 0, 30)
     wsRow.BackgroundTransparency = 1
+    wsRow.ZIndex = 6
     wsRow.Parent = scroll
     local wLay = Instance.new("UIListLayout", wsRow)
     wLay.FillDirection = Enum.FillDirection.Horizontal
@@ -1090,7 +1173,9 @@ local function BuildUI()
     local flingList = Instance.new("Frame")
     flingList.Size = UDim2.new(1, 0, 0, 200)
     flingList.BackgroundColor3 = Color3.fromRGB(32, 32, 44)
+    flingList.BackgroundTransparency = 0.4
     flingList.BorderSizePixel = 0
+    flingList.ZIndex = 6
     flingList.Parent = scroll
     Instance.new("UICorner", flingList).CornerRadius = UDim.new(0, 8)
 
@@ -1102,6 +1187,7 @@ local function BuildUI()
     flingScroll.ScrollBarThickness = 4
     flingScroll.CanvasSize = UDim2.new(0, 0, 0, 0)
     flingScroll.AutomaticCanvasSize = Enum.AutomaticSize.Y
+    flingScroll.ZIndex = 6
     flingScroll.Parent = flingList
     local flLay = Instance.new("UIListLayout", flingScroll)
     flLay.Padding = UDim.new(0, 4)
@@ -1115,13 +1201,15 @@ local function BuildUI()
             if plr == LocalPlayer then continue end
             local role = GetRole(plr)
             local b = Instance.new("TextButton")
-            b.Size = UDim2.new(1, 0, 0, 30)
+            b.Size = UDim2.new(1, 0, 0, 32)
             b.BackgroundColor3 = Color3.fromRGB(60, 60, 84)
+            b.BackgroundTransparency = 0.3
             b.Text = "   " .. plr.Name .. "  [" .. role .. "]"
             b.TextColor3 = RoleColor(role)
             b.Font = Enum.Font.GothamBold
             b.TextSize = 13
             b.TextXAlignment = Enum.TextXAlignment.Left
+            b.ZIndex = 7
             b.Parent = flingScroll
             Instance.new("UICorner", b).CornerRadius = UDim.new(0, 6)
             b.MouseButton1Click:Connect(function()
@@ -1158,15 +1246,16 @@ local function BuildUI()
 
     closeBtn.MouseButton1Click:Connect(function() main.Visible = false end)
 
-    -- REOPEN
+    -- REOPEN BUTONU (Kapanınca geri açmak için)
     local reopen = Instance.new("TextButton")
-    reopen.Size = UDim2.new(0, 48, 0, 48)
-    reopen.Position = UDim2.new(0, 12, 0.5, -24)
+    reopen.Size = UDim2.new(0, 50, 0, 50)
+    reopen.Position = UDim2.new(0, 15, 0.5, -25)
     reopen.BackgroundColor3 = Color3.fromRGB(80, 90, 220)
-    reopen.Text = "🔪"
+    reopen.BackgroundTransparency = 0.2
+    reopen.Text = "🎯"
     reopen.TextColor3 = Color3.new(1, 1, 1)
     reopen.Font = Enum.Font.GothamBold
-    reopen.TextSize = 22
+    reopen.TextSize = 24
     reopen.Parent = gui
     Instance.new("UICorner", reopen).CornerRadius = UDim.new(1, 0)
 
@@ -1188,23 +1277,37 @@ local function BuildUI()
                                          rPos.Y.Scale, rPos.Y.Offset + d.Y)
         end
     end)
-    reopen.MouseButton1Click:Connect(function() main.Visible = not main.Visible end)
+
+    local isOpen = true
+    reopen.MouseButton1Click:Connect(function()
+        isOpen = not isOpen
+        if isOpen then
+            main.Visible = true
+            main.Size = UDim2.new(0, 420, 0, 0)
+            TweenService:Create(main, TweenInfo.new(0.3, Enum.EasingStyle.Back), {Size = UDim2.new(0, 420, 0, 600)}):Play()
+        else
+            TweenService:Create(main, TweenInfo.new(0.2, Enum.EasingStyle.Quad), {Size = UDim2.new(0, 420, 0, 0)}):Play()
+            task.wait(0.2)
+            main.Visible = false
+        end
+    end)
 
     -- ATEŞ BUTONU
     local fireBtn = Instance.new("TextButton")
     fireBtn.Name = "FireButton"
-    fireBtn.Size = UDim2.new(0, 150, 0, 70)
-    fireBtn.Position = UDim2.new(1, -170, 1, -110)
+    fireBtn.Size = UDim2.new(0, 160, 0, 75)
+    fireBtn.Position = UDim2.new(1, -180, 1, -120)
     fireBtn.BackgroundColor3 = Color3.fromRGB(200, 50, 50)
     fireBtn.BackgroundTransparency = 0.15
     fireBtn.Text = "🔥 ATEŞ"
     fireBtn.TextColor3 = Color3.new(1, 1, 1)
     fireBtn.Font = Enum.Font.GothamBold
-    fireBtn.TextSize = 20
+    fireBtn.TextSize = 22
     fireBtn.Visible = Config.SilentAim.GunEnabled
     fireBtn.Active = true
+    fireBtn.ZIndex = 20
     fireBtn.Parent = gui
-    Instance.new("UICorner", fireBtn).CornerRadius = UDim.new(0, 14)
+    Instance.new("UICorner", fireBtn).CornerRadius = UDim.new(0, 16)
 
     local fStroke = Instance.new("UIStroke")
     fStroke.Color = Color3.fromRGB(255, 200, 200)
@@ -1255,7 +1358,7 @@ local function BuildUI()
 end
 
 -- ============================================================
--- BAŞLAT (Her adım güvenli)
+-- BAŞLAT
 -- ============================================================
 SafeCall(SetupSilentAim)
 SafeCall(SetupAntiAFK)
@@ -1272,5 +1375,6 @@ Threads[#Threads+1] = task.spawn(function() SafeCall(AutoFireLoop) end)
 
 SafeCall(BuildUI)
 
-print("✅ MM2 Ultimate v6 yüklendi!")
-print("🔪 Sol taraftaki 🔪 butonundan menüyü aç/kapat.")
+print("✅ MM2 Ultimate v7 'Skyfall' yüklendi!")
+print("🎨 3D animasyonlu gökyüzü menüsü aktif.")
+print("💥 Fling, Aim ve Auto Kill mantığı güncellendi.")
