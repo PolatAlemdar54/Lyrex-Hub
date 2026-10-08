@@ -1,484 +1,995 @@
---!strict
 --[[
-    ═══════════════════════════════════════════════════════════════
-    ⚽  FUTBOL ARENA VISION  |  v1.2 (Mobile Edition)
-    ═══════════════════════════════════════════════════════════════
-    Yerleştirme : StarterPlayer > StarterPlayerScripts
-    Tür         : LocalScript
-    Özellikler  : Top ESP • Yörünge Önizleme • Dokunmatik Menü
-    Uyumluluk   : Mobil (Android/iOS) & PC
-    ═══════════════════════════════════════════════════════════════
---]]
+    MM2 Ultimate Script | Delta & Diğer Executor Uyumlu
+    GitHub'a yükledikten sonra loadstring ile çalıştırın:
+    loadstring(game:HttpGet("https://raw.githubusercontent.com/KULLANICI_ADINIZ/REPO_ADINIZ/main/MM2_Script.lua"))()
+    
+    Özellikler: ESP, Silent Aim (Gun & Knife), Fling, Auto Coin Farm,
+    WalkSpeed, Bunny Hop, SpinBot, Teleport, Anti-AFK
+]]
 
-local Players            = game:GetService("Players")
-local RunService         = game:GetService("RunService")
-local UserInputService   = game:GetService("UserInputService")
-local TweenService       = game:GetService("TweenService")
-local Workspace          = game:GetService("Workspace")
-
+-- ============================================================
+-- HİZMETLER VE DEĞİŞKENLER
+-- ============================================================
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local TweenService = game:GetService("TweenService")
+local UserInputService = game:GetService("UserInputService")
 local LocalPlayer = Players.LocalPlayer
-local PlayerGui   = LocalPlayer:WaitForChild("PlayerGui")
+local Camera = workspace.CurrentCamera
 
--- ═══════════════════════════════════════════════════════════════
---  AYARLAR
--- ═══════════════════════════════════════════════════════════════
-local VISION_CONFIG = {
-    ESP_ENABLED          = true,
-    TRAJECTORY_ENABLED   = true,
-    UPDATE_RATE          = 0.1,
-    TRAJECTORY_STEPS     = 22,
-    TRAJECTORY_TIME_STEP = 0.14,
-    BALL_NAME            = "Ball",
-    GRAVITY              = Vector3.new(0, -196.2, 0),
-
-    -- Mobil UI Ayarları
-    UI_SCALE             = 0.85,          -- 0.7 - 1.0 arası önerilir
-    BUTTON_HEIGHT        = 52,            -- Dokunmatik için min 48px
-    DRAG_THRESHOLD       = 8,             -- Piksel - titremeyi önler
-    OPEN_BUTTON_SIZE     = 56,            -- Sağ alttaki küçük buton
+-- Yapılandırma
+local Config = {
+    ESP = {
+        Enabled = true,
+        ShowMurderer = true,
+        ShowSheriff = true,
+        ShowInnocent = true,
+        ShowGunDrop = true,
+        ShowTracers = true,
+        MaxDistance = 500
+    },
+    SilentAim = {
+        GunEnabled = false,
+        KnifeEnabled = false,
+        FOV = 120,
+        Smoothness = 0.15
+    },
+    Movement = {
+        WalkSpeed = 16,
+        BunnyHop = false,
+        SpinBot = false,
+        SpinSpeed = 5
+    },
+    Farm = {
+        AutoCoin = false,
+        FarmSpeed = 25,
+        StopWhenFull = true
+    },
+    Misc = {
+        AntiAFK = true,
+        FlingTarget = nil
+    }
 }
 
--- ═══════════════════════════════════════════════════════════════
---  DURUM DEĞİŞKENLERİ
--- ═══════════════════════════════════════════════════════════════
-local VisionState = {
-    ball              = nil,
-    ballHighlight     = nil,
-    ballBillboard     = nil,
-    trajectoryDots    = {},
-    isDragging        = false,
-    dragStartOffset   = Vector2.new(0, 0),
-    isMobile          = UserInputService.TouchEnabled and not UserInputService.MouseEnabled,
-}
+-- ============================================================
+-- HAFIZA YÖNETİMİ (Memory Leak Önleme)
+-- ============================================================
+local ESPObjects = {}      -- Oyuncu ESP nesneleri
+local TracerObjects = {}   -- Tracer çizgileri
+local GunDropESP = nil     -- Düşen silah ESP nesnesi
+local Connections = {}     -- Bağlantılar
+local Threads = {}         -- Aktif thread'ler
 
--- ═══════════════════════════════════════════════════════════════
---  YARDIMCI FONKSİYONLAR
--- ═══════════════════════════════════════════════════════════════
+-- Temizleme fonksiyonu (Memory Leak önleme)
+local function CleanupAll()
+    for _, obj in pairs(ESPObjects) do
+        if obj.Highlight then obj.Highlight:Destroy() end
+        if obj.Billboard then obj.Billboard:Destroy() end
+    end
+    ESPObjects = {}
+    
+    for _, tracer in pairs(TracerObjects) do
+        if tracer then tracer:Destroy() end
+    end
+    TracerObjects = {}
+    
+    if GunDropESP then
+        if GunDropESP.Highlight then GunDropESP.Highlight:Destroy() end
+        if GunDropESP.Billboard then GunDropESP.Billboard:Destroy() end
+        GunDropESP = nil
+    end
+    
+    for _, conn in pairs(Connections) do
+        if conn and conn.Disconnect then conn:Disconnect() end
+    end
+    Connections = {}
+    
+    for _, thread in pairs(Threads) do
+        if thread and thread.Cancel then thread:Cancel() end
+    end
+    Threads = {}
+end
 
-local function playToggleSound(isOn: boolean)
-    -- İsteğe bağlı: toggle geri bildirimi (titreme)
-    if VisionState.isMobile and UserInputService.VibrationEnabled then
-        pcall(function()
-            game:GetService("HapticService"):SetMotor(Enum.UserInputType.Gamepad1, Enum.VibrationMotor.Small, isOn and 0.4 or 0.15)
-            task.delay(0.1, function()
-                pcall(function()
-                    game:GetService("HapticService"):SetMotor(Enum.UserInputType.Gamepad1, Enum.VibrationMotor.Small, 0)
-                end)
-            end)
-        end)
+-- ============================================================
+-- YARDIMCI FONKSİYONLAR
+-- ============================================================
+
+-- Oyuncu rolünü belirleme (MM2'ye özel)
+local function GetPlayerRole(player)
+    if not player or not player.Character then return "Innocent" end
+    
+    local backpack = player:FindFirstChild("Backpack")
+    local character = player.Character
+    
+    -- Katil kontrolü
+    if backpack and backpack:FindFirstChild("Knife") then
+        return "Murderer"
+    end
+    if character and character:FindFirstChild("Knife") then
+        return "Murderer"
+    end
+    
+    -- Şerif kontrolü
+    if backpack and backpack:FindFirstChild("Gun") then
+        return "Sheriff"
+    end
+    if character and character:FindFirstChild("Gun") then
+        return "Sheriff"
+    end
+    
+    return "Innocent"
+end
+
+-- Rol rengini alma
+local function GetRoleColor(role)
+    if role == "Murderer" then
+        return Color3.fromRGB(255, 0, 0)      -- Kırmızı
+    elseif role == "Sheriff" then
+        return Color3.fromRGB(0, 100, 255)    -- Mavi
+    else
+        return Color3.fromRGB(0, 255, 0)      -- Yeşil
     end
 end
 
-local function applyCorner(instance: Instance, radius: number)
-    local corner = Instance.new("UICorner")
-    corner.CornerRadius = UDim.new(0, radius)
-    corner.Parent = instance
-    return corner
+-- Mesafe hesaplama
+local function GetDistance(player)
+    if not player or not player.Character then return math.huge end
+    local root = player.Character:FindFirstChild("HumanoidRootPart")
+    if not root then return math.huge end
+    return (root.Position - Camera.CFrame.Position).Magnitude
 end
 
-local function applyStroke(instance: Instance, color: Color3, thickness: number)
-    local stroke = Instance.new("UIStroke")
-    stroke.Color = color
-    stroke.Thickness = thickness
-    stroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
-    stroke.Parent = instance
-    return stroke
+-- İnsansı gecikme (Anti-Cheat Bypass)
+local function HumanDelay(min, max)
+    task.wait(math.random(min * 100, max * 100) / 100)
 end
 
--- ═══════════════════════════════════════════════════════════════
---  ESP BİLEŞENLERİ
--- ═══════════════════════════════════════════════════════════════
-
-local function createBallHighlight(parent: Instance): Highlight
+-- ============================================================
+-- ESP SİSTEMİ
+-- ============================================================
+local function CreateESP(player)
+    if not player or not player.Character then return end
+    if player == LocalPlayer then return end
+    
+    local character = player.Character
+    local humanoidRootPart = character:FindFirstChild("HumanoidRootPart")
+    if not humanoidRootPart then return end
+    
+    -- Zaten varsa güncelle
+    if ESPObjects[player] then
+        local esp = ESPObjects[player]
+        if esp.Highlight and esp.Highlight.Parent then
+            return
+        end
+    end
+    
+    local role = GetPlayerRole(player)
+    local color = GetRoleColor(role)
+    
+    -- Highlight oluştur
     local highlight = Instance.new("Highlight")
-    highlight.Name                = "ArenaVision_Highlight"
-    highlight.FillColor           = Color3.fromRGB(0, 255, 120)
-    highlight.FillTransparency    = 0.55
-    highlight.OutlineColor        = Color3.fromRGB(255, 255, 255)
-    highlight.OutlineTransparency = 0
-    highlight.DepthMode           = Enum.HighlightDepthMode.AlwaysOnTop
-    highlight.Parent              = parent
-    return highlight
-end
-
-local function createBallLabel(parent: Instance): BillboardGui
+    highlight.Name = "MM2_ESP_Highlight"
+    highlight.FillColor = color
+    highlight.OutlineColor = Color3.new(1, 1, 1)
+    highlight.FillTransparency = 0.6
+    highlight.OutlineTransparency = 0.2
+    highlight.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+    highlight.Parent = character
+    
+    -- BillboardGui (İsim ve mesafe)
     local billboard = Instance.new("BillboardGui")
-    billboard.Name         = "ArenaVision_Label"
-    billboard.Size         = UDim2.new(5, 0, 1.6, 0)
-    billboard.StudsOffset  = Vector3.new(0, 2.5, 0)
-    billboard.AlwaysOnTop  = true
-    billboard.MaxDistance  = 600
-    billboard.Parent       = parent
-
-    local label = Instance.new("TextLabel")
-    label.Size                   = UDim2.new(1, 0, 1, 0)
-    label.BackgroundTransparency = 1
-    label.TextColor3             = Color3.fromRGB(0, 255, 120)
-    label.TextStrokeColor3       = Color3.fromRGB(0, 0, 0)
-    label.TextStrokeTransparency = 0.3
-    label.TextScaled             = true
-    label.Font                   = Enum.Font.GothamBlack
-    label.Text                   = "⚽ TOP"
-    label.Parent                 = billboard
-
-    return billboard
+    billboard.Name = "MM2_ESP_Billboard"
+    billboard.Size = UDim2.new(0, 200, 0, 50)
+    billboard.StudsOffset = Vector3.new(0, 3, 0)
+    billboard.AlwaysOnTop = true
+    billboard.Parent = character
+    
+    local nameLabel = Instance.new("TextLabel")
+    nameLabel.Name = "NameLabel"
+    nameLabel.Size = UDim2.new(1, 0, 0.5, 0)
+    nameLabel.BackgroundTransparency = 1
+    nameLabel.Text = player.Name .. " [" .. role .. "]"
+    nameLabel.TextColor3 = color
+    nameLabel.TextStrokeTransparency = 0
+    nameLabel.TextSize = 16
+    nameLabel.Font = Enum.Font.GothamBold
+    nameLabel.Parent = billboard
+    
+    local distanceLabel = Instance.new("TextLabel")
+    distanceLabel.Name = "DistanceLabel"
+    distanceLabel.Size = UDim2.new(1, 0, 0.5, 0)
+    distanceLabel.Position = UDim2.new(0, 0, 0.5, 0)
+    distanceLabel.BackgroundTransparency = 1
+    distanceLabel.Text = "0 studs"
+    distanceLabel.TextColor3 = Color3.new(1, 1, 1)
+    distanceLabel.TextStrokeTransparency = 0
+    distanceLabel.TextSize = 14
+    distanceLabel.Font = Enum.Font.Gotham
+    distanceLabel.Parent = billboard
+    
+    ESPObjects[player] = {
+        Highlight = highlight,
+        Billboard = billboard,
+        NameLabel = nameLabel,
+        DistanceLabel = distanceLabel,
+        Character = character
+    }
 end
 
-local function enableBallESP(target: BasePart)
-    if VisionState.ballHighlight then VisionState.ballHighlight:Destroy() end
-    if VisionState.ballBillboard then VisionState.ballBillboard:Destroy() end
-
-    VisionState.ballHighlight = createBallHighlight(target)
-    VisionState.ballBillboard = createBallLabel(target)
-
-    target:GetPropertyChangedSignal("Size"):Connect(function()
-        if VisionState.ballBillboard then
-            VisionState.ballBillboard.StudsOffset = Vector3.new(0, target.Size.Y / 2 + 1.8, 0)
-        end
-    end)
-end
-
-local function disableBallESP()
-    if VisionState.ballHighlight then VisionState.ballHighlight:Destroy() VisionState.ballHighlight = nil end
-    if VisionState.ballBillboard then VisionState.ballBillboard:Destroy() VisionState.ballBillboard = nil end
-end
-
--- ═══════════════════════════════════════════════════════════════
---  YÖRÜNGE SİSTEMİ
--- ═══════════════════════════════════════════════════════════════
-
-local function clearTrajectory()
-    for _, dot in ipairs(VisionState.trajectoryDots) do
-        if dot and dot.Parent then dot:Destroy() end
+-- ESP temizleme (tek oyuncu)
+local function RemoveESP(player)
+    local esp = ESPObjects[player]
+    if not esp then return end
+    
+    if esp.Highlight and esp.Highlight.Parent then
+        esp.Highlight:Destroy()
     end
-    table.clear(VisionState.trajectoryDots)
+    if esp.Billboard and esp.Billboard.Parent then
+        esp.Billboard:Destroy()
+    end
+    
+    ESPObjects[player] = nil
 end
 
-local function spawnTrajectoryDot(position: Vector3, index: int)
-    local dot = Instance.new("Part")
-    dot.Name         = "ArenaVision_TrajDot"
-    dot.Anchored     = true
-    dot.CanCollide   = false
-    dot.CanQuery     = false
-    dot.CanTouch     = false
-    dot.Massless     = true
-    dot.Shape        = Enum.PartType.Ball
-    dot.Size         = Vector3.new(0.25, 0.25, 0.25)
-    dot.Position     = position
-    dot.Color        = Color3.fromRGB(255, 90 + index * 3, 0)
-    dot.Material     = Enum.Material.Neon
-    dot.Transparency = 0.15 + (index / VISION_CONFIG.TRAJECTORY_STEPS) * 0.6
-    dot.Parent       = Workspace
-
-    table.insert(VisionState.trajectoryDots, dot)
-end
-
-local function updateTrajectory()
-    clearTrajectory()
-
-    local ball = VisionState.ball
-    if not VISION_CONFIG.TRAJECTORY_ENABLED or not ball or not ball:IsA("BasePart") then return end
-
-    local velocity = ball.AssemblyLinearVelocity
-    if velocity.Magnitude < 5 then return end
-
-    local startPos = ball.Position
-    local gravity  = VISION_CONFIG.GRAVITY
-    local dt       = VISION_CONFIG.TRAJECTORY_TIME_STEP
-
-    for i = 1, VISION_CONFIG.TRAJECTORY_STEPS do
-        local t = i * dt
-        local pos = startPos + velocity * t + 0.5 * gravity * t * t
-        if pos.Y < -50 then break end
-        spawnTrajectoryDot(pos, i)
+-- Tüm oyuncular için ESP güncelle
+local function UpdateAllESP()
+    for _, player in pairs(Players:GetPlayers()) do
+        if player ~= LocalPlayer and player.Character then
+            CreateESP(player)
+        end
     end
 end
 
--- ═══════════════════════════════════════════════════════════════
---  MOBİL SÜRÜKLEME (DOKUNMATİK)
--- ═══════════════════════════════════════════════════════════════
+-- ESP döngüsü (Throttling ile optimize edilmiş)
+local espAccumulator = 0
+local espInterval = 1/30 -- 30 FPS'de güncelle
 
-local function makeDraggable(frame: GuiObject)
-    local dragging    = false
-    local dragInput   = nil
-    local dragStart   = nil
-    local startPos    = nil
-
-    local function updateDrag(input)
-        local delta = input.Position - dragStart
-        frame.Position = UDim2.new(
-            startPos.X.Scale,
-            startPos.X.Offset + delta.X,
-            startPos.Y.Scale,
-            startPos.Y.Offset + delta.Y
-        )
+local function ESPLoop(deltaTime)
+    espAccumulator = espAccumulator + deltaTime
+    if espAccumulator < espInterval then return end
+    espAccumulator = 0
+    
+    if not Config.ESP.Enabled then
+        -- Tüm ESP'leri temizle
+        for player, _ in pairs(ESPObjects) do
+            RemoveESP(player)
+        end
+        return
     end
-
-    frame.InputBegan:Connect(function(input)
-        if input.UserInputType == Enum.UserInputType.MouseButton1
-        or input.UserInputType == Enum.UserInputType.Touch then
-            dragging  = true
-            dragStart = input.Position
-            startPos  = frame.Position
-
-            input.Changed:Connect(function()
-                if input.UserInputState == Enum.UserInputState.End then
-                    dragging = false
-                end
-            end)
+    
+    for player, esp in pairs(ESPObjects) do
+        if not player or not player.Character or not esp.Billboard then
+            RemoveESP(player)
+            continue
         end
-    end)
-
-    frame.InputChanged:Connect(function(input)
-        if input.UserInputType == Enum.UserInputType.MouseMovement
-        or input.UserInputType == Enum.UserInputType.Touch then
-            dragInput = input
-        end
-    end)
-
-    UserInputService.InputChanged:Connect(function(input)
-        if dragging and input == dragInput then
-            updateDrag(input)
-        end
-    end)
-end
-
--- ═══════════════════════════════════════════════════════════════
---  ARAYÜZ OLUŞTURMA
--- ═══════════════════════════════════════════════════════════════
-
-local function createVisionUI()
-    local screenGui = Instance.new("ScreenGui")
-    screenGui.Name            = "ArenaVision_UI"
-    screenGui.ResetOnSpawn    = false
-    screenGui.ZIndexBehavior  = Enum.ZIndexBehavior.Sibling
-    screenGui.IgnoreGuiInset  = true
-    screenGui.Parent          = PlayerGui
-
-    local scale = VISION_CONFIG.UI_SCALE
-    local panelWidth  = math.floor(240 * scale)
-    local panelHeight = math.floor(210 * scale)
-
-    -- ───── Ana Panel ─────
-    local panel = Instance.new("Frame")
-    panel.Name                   = "VisionPanel"
-    panel.Size                   = UDim2.new(0, panelWidth, 0, panelHeight)
-    panel.Position               = UDim2.new(0, 16, 0.5, -panelHeight / 2)
-    panel.BackgroundColor3       = Color3.fromRGB(18, 18, 28)
-    panel.BackgroundTransparency = 0.08
-    panel.BorderSizePixel        = 0
-    panel.Active                 = true
-    panel.Parent                 = screenGui
-    applyCorner(panel, 16)
-    applyStroke(panel, Color3.fromRGB(0, 255, 120), 1.2)
-
-    -- ───── Başlık ─────
-    local header = Instance.new("Frame")
-    header.Name             = "Header"
-    header.Size             = UDim2.new(1, 0, 0, math.floor(42 * scale))
-    header.BackgroundColor3 = Color3.fromRGB(28, 28, 42)
-    header.BorderSizePixel  = 0
-    header.Parent           = panel
-    applyCorner(header, 16)
-
-    local headerFix = Instance.new("Frame")
-    headerFix.Size             = UDim2.new(1, 0, 0.5, 0)
-    headerFix.Position         = UDim2.new(0, 0, 0.5, 0)
-    headerFix.BackgroundColor3 = Color3.fromRGB(28, 28, 42)
-    headerFix.BorderSizePixel  = 0
-    headerFix.Parent           = header
-
-    local title = Instance.new("TextLabel")
-    title.Size                   = UDim2.new(1, -60, 1, 0)
-    title.Position               = UDim2.new(0, 12, 0, 0)
-    title.BackgroundTransparency = 1
-    title.Text                   = "⚽ ARENA VISION"
-    title.TextColor3             = Color3.fromRGB(0, 255, 120)
-    title.TextXAlignment         = Enum.TextXAlignment.Left
-    title.TextScaled             = true
-    title.Font                   = Enum.Font.GothamBold
-    title.Parent                 = header
-
-    -- Kapat (X) butonu
-    local closeButton = Instance.new("TextButton")
-    closeButton.Size                   = UDim2.new(0, 34, 0, 34)
-    closeButton.Position               = UDim2.new(1, -40, 0.5, -17)
-    closeButton.BackgroundColor3       = Color3.fromRGB(200, 55, 55)
-    closeButton.Text                   = "✕"
-    closeButton.TextColor3             = Color3.fromRGB(255, 255, 255)
-    closeButton.TextScaled             = true
-    closeButton.Font                   = Enum.Font.GothamBold
-    closeButton.BorderSizePixel        = 0
-    closeButton.AutoButtonColor        = true
-    closeButton.Parent                 = header
-    applyCorner(closeButton, 10)
-
-    -- ───── ESP Butonu ─────
-    local espButton = Instance.new("TextButton")
-    espButton.Name             = "ESPButton"
-    espButton.Size             = UDim2.new(1, -24, 0, VISION_CONFIG.BUTTON_HEIGHT * scale)
-    espButton.Position         = UDim2.new(0, 12, 0, math.floor(56 * scale))
-    espButton.BackgroundColor3 = Color3.fromRGB(0, 190, 90)
-    espButton.Text             = "TOP ESP  •  AÇIK"
-    espButton.TextColor3       = Color3.fromRGB(255, 255, 255)
-    espButton.TextScaled       = true
-    espButton.Font             = Enum.Font.GothamBold
-    espButton.BorderSizePixel  = 0
-    espButton.AutoButtonColor  = false
-    espButton.Parent           = panel
-    applyCorner(espButton, 12)
-
-    -- ───── Yörünge Butonu ─────
-    local trajButton = Instance.new("TextButton")
-    trajButton.Name             = "TrajButton"
-    trajButton.Size             = UDim2.new(1, -24, 0, VISION_CONFIG.BUTTON_HEIGHT * scale)
-    trajButton.Position         = UDim2.new(0, 12, 0, math.floor(120 * scale))
-    trajButton.BackgroundColor3 = Color3.fromRGB(0, 190, 90)
-    trajButton.Text             = "YÖRÜNGE  •  AÇIK"
-    trajButton.TextColor3       = Color3.fromRGB(255, 255, 255)
-    trajButton.TextScaled       = true
-    trajButton.Font             = Enum.Font.GothamBold
-    trajButton.BorderSizePixel  = 0
-    trajButton.AutoButtonColor  = false
-    trajButton.Parent           = panel
-    applyCorner(trajButton, 12)
-
-    -- ───── Sürükleme İpucu ─────
-    local hint = Instance.new("TextLabel")
-    hint.Size                   = UDim2.new(1, 0, 0, 20)
-    hint.Position               = UDim2.new(0, 0, 1, -24)
-    hint.BackgroundTransparency = 1
-    hint.Text                   = "☰  Sürüklemek için başlığı tut"
-    hint.TextColor3             = Color3.fromRGB(150, 150, 170)
-    hint.TextScaled             = true
-    hint.Font                   = Enum.Font.Gotham
-    hint.Parent                 = panel
-
-    -- ═══════════════════════════════════════════════════════════════
-    --  AÇ / KAPA BUTONU (Ekranın sağ altı, mobil için ideal)
-    -- ═══════════════════════════════════════════════════════════════
-    local openButton = Instance.new("TextButton")
-    openButton.Name             = "OpenButton"
-    openButton.Size             = UDim2.new(0, VISION_CONFIG.OPEN_BUTTON_SIZE, 0, VISION_CONFIG.OPEN_BUTTON_SIZE)
-    openButton.Position         = UDim2.new(1, -VISION_CONFIG.OPEN_BUTTON_SIZE - 20, 1, -VISION_CONFIG.OPEN_BUTTON_SIZE - 120)
-    openButton.BackgroundColor3 = Color3.fromRGB(0, 190, 90)
-    openButton.Text             = "⚽"
-    openButton.TextColor3       = Color3.fromRGB(255, 255, 255)
-    openButton.TextScaled       = true
-    openButton.Font             = Enum.Font.GothamBold
-    openButton.BorderSizePixel  = 0
-    openButton.Visible          = false
-    openButton.Parent           = screenGui
-    applyCorner(openButton, VISION_CONFIG.OPEN_BUTTON_SIZE / 2)
-    applyStroke(openButton, Color3.fromRGB(255, 255, 255), 1.5)
-
-    -- ═══════════════════════════════════════════════════════════════
-    --  OLAY BAĞLANTILARI
-    -- ═══════════════════════════════════════════════════════════════
-
-    -- ESP Toggle
-    espButton.MouseButton1Click:Connect(function()
-        VISION_CONFIG.ESP_ENABLED = not VISION_CONFIG.ESP_ENABLED
-        playToggleSound(VISION_CONFIG.ESP_ENABLED)
-
-        if VISION_CONFIG.ESP_ENABLED then
-            espButton.BackgroundColor3 = Color3.fromRGB(0, 190, 90)
-            espButton.Text = "TOP ESP  •  AÇIK"
-            if VisionState.ball then enableBallESP(VisionState.ball) end
+        
+        local distance = GetDistance(player)
+        if distance > Config.ESP.MaxDistance then
+            esp.Billboard.Enabled = false
+            if esp.Highlight then esp.Highlight.Enabled = false end
         else
-            espButton.BackgroundColor3 = Color3.fromRGB(70, 70, 85)
-            espButton.Text = "TOP ESP  •  KAPALI"
-            disableBallESP()
-        end
-    end)
-
-    -- Yörünge Toggle
-    trajButton.MouseButton1Click:Connect(function()
-        VISION_CONFIG.TRAJECTORY_ENABLED = not VISION_CONFIG.TRAJECTORY_ENABLED
-        playToggleSound(VISION_CONFIG.TRAJECTORY_ENABLED)
-
-        if VISION_CONFIG.TRAJECTORY_ENABLED then
-            trajButton.BackgroundColor3 = Color3.fromRGB(0, 190, 90)
-            trajButton.Text = "YÖRÜNGE  •  AÇIK"
-        else
-            trajButton.BackgroundColor3 = Color3.fromRGB(70, 70, 85)
-            trajButton.Text = "YÖRÜNGE  •  KAPALI"
-            clearTrajectory()
-        end
-    end)
-
-    -- Kapat
-    closeButton.MouseButton1Click:Connect(function()
-        panel.Visible      = false
-        openButton.Visible = true
-        if VISION_CONFIG.TRAJECTORY_ENABLED then clearTrajectory() end
-    end)
-
-    -- Aç
-    openButton.MouseButton1Click:Connect(function()
-        panel.Visible      = true
-        openButton.Visible = false
-    end)
-
-    -- Sürükleme (tüm panel değil, sadece başlık)
-    makeDraggable(header)
-
-    return screenGui, panel, openButton
-end
-
--- ═══════════════════════════════════════════════════════════════
---  TOP TAKİBİ
--- ═══════════════════════════════════════════════════════════════
-
-local function locateBall(): BasePart?
-    local found = Workspace:FindFirstChild(VISION_CONFIG.BALL_NAME, true)
-    if found and found:IsA("BasePart") then return found end
-    return nil
-end
-
-local function onDescendantAdded(child: Instance)
-    if child:IsA("BasePart") and child.Name == VISION_CONFIG.BALL_NAME then
-        VisionState.ball = child
-        if VISION_CONFIG.ESP_ENABLED then enableBallESP(child) end
-    end
-end
-
--- ═══════════════════════════════════════════════════════════════
---  ANA DÖNGÜ (Throttled)
--- ═══════════════════════════════════════════════════════════════
-
-local function startVisionLoop()
-    while task.wait(VISION_CONFIG.UPDATE_RATE) do
-        if not VisionState.ball or not VisionState.ball.Parent then
-            VisionState.ball = locateBall()
-            if VisionState.ball and VISION_CONFIG.ESP_ENABLED and not VisionState.ballHighlight then
-                enableBallESP(VisionState.ball)
+            esp.Billboard.Enabled = true
+            if esp.Highlight then esp.Highlight.Enabled = true end
+            
+            -- Rol güncellemesi
+            local role = GetPlayerRole(player)
+            local color = GetRoleColor(role)
+            
+            if esp.NameLabel then
+                esp.NameLabel.Text = player.Name .. " [" .. role .. "]"
+                esp.NameLabel.TextColor3 = color
+            end
+            if esp.Highlight then
+                esp.Highlight.FillColor = color
+            end
+            if esp.DistanceLabel then
+                esp.DistanceLabel.Text = math.floor(distance) .. " studs"
             end
         end
+    end
+end
 
-        if VISION_CONFIG.TRAJECTORY_ENABLED then
-            updateTrajectory()
+-- ============================================================
+-- DÜŞEN SİLAH ESP
+-- ============================================================
+local function UpdateGunDropESP()
+    -- Önceki ESP'yi temizle
+    if GunDropESP then
+        if GunDropESP.Highlight then GunDropESP.Highlight:Destroy() end
+        if GunDropESP.Billboard then GunDropESP.Billboard:Destroy() end
+        GunDropESP = nil
+    end
+    
+    if not Config.ESP.ShowGunDrop then return end
+    
+    -- Düşen silahı bul
+    local gun = workspace:FindFirstChild("GunDrop")
+    if not gun then
+        -- Alternatif isimler
+        gun = workspace:FindFirstChild("Gun")
+    end
+    if not gun then return end
+    
+    local handle = gun:FindFirstChild("Handle") or gun:FindFirstChildWhichIsA("BasePart")
+    if not handle then return end
+    
+    -- Highlight
+    local highlight = Instance.new("Highlight")
+    highlight.Name = "MM2_GunDrop_ESP"
+    highlight.FillColor = Color3.fromRGB(255, 165, 0) -- Turuncu
+    highlight.OutlineColor = Color3.new(1, 1, 1)
+    highlight.FillTransparency = 0.5
+    highlight.OutlineTransparency = 0.1
+    highlight.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+    highlight.Parent = gun
+    
+    -- Billboard
+    local billboard = Instance.new("BillboardGui")
+    billboard.Name = "MM2_GunDrop_Billboard"
+    billboard.Size = UDim2.new(0, 150, 0, 40)
+    billboard.StudsOffset = Vector3.new(0, 2, 0)
+    billboard.AlwaysOnTop = true
+    billboard.Parent = gun
+    
+    local label = Instance.new("TextLabel")
+    label.Size = UDim2.new(1, 0, 1, 0)
+    label.BackgroundTransparency = 1
+    label.Text = "🔫 DÜŞEN SİLAH"
+    label.TextColor3 = Color3.fromRGB(255, 165, 0)
+    label.TextStrokeTransparency = 0
+    label.TextSize = 14
+    label.Font = Enum.Font.GothamBold
+    label.Parent = billboard
+    
+    GunDropESP = {
+        Highlight = highlight,
+        Billboard = billboard,
+        Label = label,
+        Part = handle
+    }
+end
+
+-- ============================================================
+-- TRACERS (Oyunculara Çizgi)
+-- ============================================================
+local function UpdateTracers()
+    -- Tüm tracer'ları temizle
+    for _, tracer in pairs(TracerObjects) do
+        if tracer then tracer:Destroy() end
+    end
+    TracerObjects = {}
+    
+    if not Config.ESP.ShowTracers or not Config.ESP.Enabled then return end
+    
+    local cameraPos = Camera.CFrame.Position
+    
+    for _, player in pairs(Players:GetPlayers()) do
+        if player == LocalPlayer or not player.Character then continue end
+        
+        local root = player.Character:FindFirstChild("HumanoidRootPart")
+        if not root then continue end
+        
+        local distance = (root.Position - cameraPos).Magnitude
+        if distance > Config.ESP.MaxDistance then continue end
+        
+        local role = GetPlayerRole(player)
+        local color = GetRoleColor(role)
+        
+        -- Tracer çizgisi (Drawing kütüphanesi yoksa Beam kullanılabilir)
+        local attachment0 = Instance.new("Attachment")
+        attachment0.Parent = Camera
+        
+        local attachment1 = Instance.new("Attachment")
+        attachment1.Parent = root
+        
+        local beam = Instance.new("Beam")
+        beam.Attachment0 = attachment0
+        beam.Attachment1 = attachment1
+        beam.Color = ColorSequence.new(color)
+        beam.Transparency = NumberSequence.new(0.5)
+        beam.Width0 = 0.05
+        beam.Width1 = 0.05
+        beam.FaceCamera = true
+        beam.Parent = Camera
+        
+        table.insert(TracerObjects, beam)
+        table.insert(TracerObjects, attachment0)
+        table.insert(TracerObjects, attachment1)
+    end
+end
+
+-- ============================================================
+-- SİLAH SİLENT AİM (Şerif iken Katili vurma)
+-- ============================================================
+local function GetClosestTarget(roleFilter)
+    local closest = nil
+    local shortestDist = math.huge
+    local cameraPos = Camera.CFrame.Position
+    
+    for _, player in pairs(Players:GetPlayers()) do
+        if player == LocalPlayer or not player.Character then continue end
+        
+        local role = GetPlayerRole(player)
+        if roleFilter and role ~= roleFilter then continue end
+        
+        local root = player.Character:FindFirstChild("HumanoidRootPart")
+        if not root then continue end
+        
+        local dist = (root.Position - cameraPos).Magnitude
+        if dist < shortestDist and dist <= Config.SilentAim.FOV then
+            shortestDist = dist
+            closest = player
+        end
+    end
+    
+    return closest
+end
+
+-- Silent Aim döngüsü
+local function SilentAimLoop()
+    while task.wait(0.1) do
+        if not Config.SilentAim.GunEnabled then continue end
+        
+        local target = GetClosestTarget("Murderer")
+        if not target then continue end
+        
+        local character = target.Character
+        if not character then continue end
+        
+        local head = character:FindFirstChild("Head")
+        if not head then continue end
+        
+        -- Kamera hedefe yönlendir (Silent Aim)
+        local cameraPos = Camera.CFrame.Position
+        local direction = (head.Position - cameraPos).Unit
+        
+        -- İnsansı gecikme ile yumuşak geçiş
+        local tween = TweenService:Create(
+            Camera,
+            TweenInfo.new(Config.SilentAim.Smoothness, Enum.EasingStyle.Linear),
+            {CFrame = CFrame.new(cameraPos, cameraPos + direction)}
+        )
+        tween:Play()
+        
+        HumanDelay(0.05, 0.15)
+    end
+end
+
+-- ============================================================
+-- BIÇAK SİLENT AİM (Katil iken yakındaki oyuncuları avlama)
+-- ============================================================
+local function KnifeSilentAimLoop()
+    while task.wait(0.2) do
+        if not Config.SilentAim.KnifeEnabled then continue end
+        
+        local character = LocalPlayer.Character
+        if not character then continue end
+        
+        -- Katil mi kontrol et
+        local backpack = LocalPlayer:FindFirstChild("Backpack")
+        local isMurderer = (backpack and backpack:FindFirstChild("Knife")) or 
+                           (character and character:FindFirstChild("Knife"))
+        if not isMurderer then continue end
+        
+        -- En yakın oyuncuyu bul
+        local closest = nil
+        local shortestDist = math.huge
+        local myRoot = character:FindFirstChild("HumanoidRootPart")
+        if not myRoot then continue end
+        
+        for _, player in pairs(Players:GetPlayers()) do
+            if player == LocalPlayer or not player.Character then continue end
+            
+            local root = player.Character:FindFirstChild("HumanoidRootPart")
+            if not root then continue end
+            
+            local dist = (root.Position - myRoot.Position).Magnitude
+            if dist < shortestDist and dist < 15 then -- 15 stud mesafe
+                shortestDist = dist
+                closest = player
+            end
+        end
+        
+        if closest and closest.Character then
+            local targetRoot = closest.Character:FindFirstChild("HumanoidRootPart")
+            if targetRoot then
+                -- Hedefe doğru ışınlanma (insansı gecikme ile)
+                local tween = TweenService:Create(
+                    myRoot,
+                    TweenInfo.new(0.1, Enum.EasingStyle.Linear),
+                    {CFrame = targetRoot.CFrame}
+                )
+                tween:Play()
+                
+                -- Bıçak saldırısı
+                task.wait(0.1)
+                local tool = character:FindFirstChildOfClass("Tool")
+                if tool then
+                    tool:Activate()
+                end
+            end
         end
     end
 end
 
--- ═══════════════════════════════════════════════════════════════
---  BAŞLATMA
--- ═══════════════════════════════════════════════════════════════
-
-local screenGui, mainPanel, openButton = createVisionUI()
-
-VisionState.ball = locateBall()
-if VisionState.ball and VISION_CONFIG.ESP_ENABLED then
-    enableBallESP(VisionState.ball)
+-- ============================================================
+-- FLING (Hedef Oyuncuyu Fırlatma)
+-- ============================================================
+local function FlingPlayer(targetPlayer)
+    if not targetPlayer or not targetPlayer.Character then return end
+    
+    local targetRoot = targetPlayer.Character:FindFirstChild("HumanoidRootPart")
+    if not targetRoot then return end
+    
+    -- Fling vektörü (harita dışına doğru)
+    local flingDirection = Vector3.new(0, 500, 0) -- Yukarı doğru fırlat
+    local randomOffset = Vector3.new(math.random(-100, 100), 0, math.random(-100, 100))
+    
+    -- İnsansı gecikme
+    HumanDelay(0.1, 0.3)
+    
+    -- Hedefi fırlat
+    targetRoot.Velocity = flingDirection + randomOffset
+    targetRoot.RotVelocity = Vector3.new(math.random(-50, 50), math.random(-50, 50), math.random(-50, 50))
 end
 
-Workspace.DescendantAdded:Connect(onDescendantAdded)
-task.spawn(startVisionLoop)
+-- Fling döngüsü
+local function FlingLoop()
+    while task.wait(0.5) do
+        if not Config.Misc.FlingTarget then continue end
+        
+        local target = Config.Misc.FlingTarget
+        if target and target.Character then
+            FlingPlayer(target)
+        else
+            Config.Misc.FlingTarget = nil
+        end
+    end
+end
 
--- Mobil için: Panel açıkken yörünge temizliği güvencesi
-LocalPlayer.CharacterAdded:Connect(function()
-    clearTrajectory()
+-- ============================================================
+-- AUTO COIN FARM
+-- ============================================================
+local function GetClosestCoin()
+    local closest = nil
+    local shortestDist = math.huge
+    local myRoot = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
+    if not myRoot then return nil end
+    
+    -- Coin container'ı bul
+    local coinFolder = workspace:FindFirstChild("CoinFolder") or 
+                       workspace:FindFirstChild("Coins") or
+                       workspace:FindFirstChild("CoinContainer")
+    
+    if not coinFolder then
+        -- Tüm workspace'te coin ara
+        for _, obj in pairs(workspace:GetDescendants()) do
+            if obj.Name:lower():find("coin") and obj:IsA("BasePart") then
+                local dist = (obj.Position - myRoot.Position).Magnitude
+                if dist < shortestDist and dist < 500 then
+                    shortestDist = dist
+                    closest = obj
+                end
+            end
+        end
+    else
+        for _, coin in pairs(coinFolder:GetChildren()) do
+            if coin:IsA("BasePart") then
+                local dist = (coin.Position - myRoot.Position).Magnitude
+                if dist < shortestDist and dist < 500 then
+                    shortestDist = dist
+                    closest = coin
+                end
+            end
+        end
+    end
+    
+    return closest
+end
+
+-- Auto Farm döngüsü (Throttling ile)
+local farmAccumulator = 0
+local farmInterval = 0.5 -- 2 saniyede bir kontrol
+
+local function AutoFarmLoop(deltaTime)
+    farmAccumulator = farmAccumulator + deltaTime
+    if farmAccumulator < farmInterval then return end
+    farmAccumulator = 0
+    
+    if not Config.Farm.AutoCoin then return end
+    
+    -- Çanta doluluk kontrolü (MM2'de çanta limiti)
+    if Config.Farm.StopWhenFull then
+        local backpack = LocalPlayer:FindFirstChild("Backpack")
+        if backpack then
+            local coinCount = 0
+            for _, item in pairs(backpack:GetChildren()) do
+                if item.Name:lower():find("coin") then
+                    coinCount = coinCount + 1
+                end
+            end
+            if coinCount >= 50 then -- Varsayılan limit
+                return
+            end
+        end
+    end
+    
+    local coin = GetClosestCoin()
+    if not coin then return end
+    
+    local myRoot = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
+    if not myRoot then return end
+    
+    -- İnsansı gecikme
+    HumanDelay(0.1, 0.2)
+    
+    -- Coin'e doğru Tween ile hareket (anti-cheat bypass)
+    local distance = (coin.Position - myRoot.Position).Magnitude
+    local travelTime = distance / Config.Farm.FarmSpeed
+    
+    local tween = TweenService:Create(
+        myRoot,
+        TweenInfo.new(travelTime, Enum.EasingStyle.Linear),
+        {CFrame = CFrame.new(coin.Position + Vector3.new(0, 3, 0))}
+    )
+    tween:Play()
+end
+
+-- ============================================================
+-- HAREKET SİSTEMİ
+-- ============================================================
+
+-- WalkSpeed güncelleme
+local function UpdateWalkSpeed()
+    local character = LocalPlayer.Character
+    if not character then return end
+    
+    local humanoid = character:FindFirstChildOfClass("Humanoid")
+    if not humanoid then return end
+    
+    humanoid.WalkSpeed = Config.Movement.WalkSpeed
+end
+
+-- Bunny Hop döngüsü
+local function BunnyHopLoop()
+    while task.wait(0.1) do
+        if not Config.Movement.BunnyHop then continue end
+        
+        local character = LocalPlayer.Character
+        if not character then continue end
+        
+        local humanoid = character:FindFirstChildOfClass("Humanoid")
+        if not humanoid then continue end
+        
+        -- Yerde mi kontrol et
+        if humanoid.FloorMaterial ~= Enum.Material.Air then
+            humanoid.Jump = true
+        end
+    end
+end
+
+-- SpinBot döngüsü
+local function SpinBotLoop()
+    while task.wait(0.03) do
+        if not Config.Movement.SpinBot then continue end
+        
+        local character = LocalPlayer.Character
+        if not character then continue end
+        
+        local root = character:FindFirstChild("HumanoidRootPart")
+        if not root then continue end
+        
+        -- 360 derece dönüş
+        local currentCFrame = root.CFrame
+        local rotatedCFrame = currentCFrame * CFrame.Angles(0, math.rad(Config.Movement.SpinSpeed), 0)
+        root.CFrame = rotatedCFrame
+    end
+end
+
+-- ============================================================
+-- ANTI-AFK
+-- ============================================================
+local function AntiAFK()
+    local vu = game:GetService("VirtualUser")
+    
+    Connections[#Connections + 1] = LocalPlayer.Idled:Connect(function()
+        vu:CaptureController()
+        vu:ClickButton2(Vector2.new())
+    end)
+end
+
+-- ============================================================
+-- ANA DÖNGÜLER (RenderStepped Optimizasyonu)
+-- ============================================================
+local lastUpdate = tick()
+
+Connections[#Connections + 1] = RunService.RenderStepped:Connect(function(deltaTime)
+    local now = tick()
+    if now - lastUpdate < 1/60 then return end -- 60 FPS sınırı
+    lastUpdate = now
+    
+    -- Throttling uygulanmış döngüler
+    if Config.ESP.Enabled then
+        ESPLoop(deltaTime)
+        UpdateTracers()
+    end
+    
+    if Config.Farm.AutoCoin then
+        AutoFarmLoop(deltaTime)
+    end
 end)
 
-print("[ArenaVision] ⚽ Mobil sürüm aktif. Panel sürüklemek için başlığı tut.")
+-- Düşen silah ESP'sini periyodik güncelle
+Threads[#Threads + 1] = task.spawn(function()
+    while task.wait(1) do
+        if Config.ESP.ShowGunDrop and Config.ESP.Enabled then
+            UpdateGunDropESP()
+        end
+    end
+end)
+
+-- ============================================================
+-- OYUNCU OLAYLARI
+-- ============================================================
+Connections[#Connections + 1] = Players.PlayerAdded:Connect(function(player)
+    player.CharacterAdded:Connect(function()
+        task.wait(1)
+        if Config.ESP.Enabled then
+            CreateESP(player)
+        end
+    end)
+end)
+
+Connections[#Connections + 1] = Players.PlayerRemoving:Connect(function(player)
+    RemoveESP(player)
+end)
+
+-- Mevcut oyuncular için ESP başlat
+UpdateAllESP()
+
+-- ============================================================
+-- SCRIPT BAŞLATMA
+-- ============================================================
+-- Hareket döngülerini başlat
+Threads[#Threads + 1] = task.spawn(BunnyHopLoop)
+Threads[#Threads + 1] = task.spawn(SpinBotLoop)
+Threads[#Threads + 1] = task.spawn(SilentAimLoop)
+Threads[#Threads + 1] = task.spawn(KnifeSilentAimLoop)
+Threads[#Threads + 1] = task.spawn(FlingLoop)
+
+-- Anti-AFK başlat
+if Config.Misc.AntiAFK then
+    AntiAFK()
+end
+
+-- WalkSpeed başlangıç değeri
+UpdateWalkSpeed()
+
+-- ============================================================
+-- KULLANICI ARAYÜZÜ (Basit, Modern UI)
+-- ============================================================
+local ScreenGui = Instance.new("ScreenGui")
+ScreenGui.Name = "MM2_Ultimate_UI"
+ScreenGui.ResetOnSpawn = false
+ScreenGui.Parent = LocalPlayer:WaitForChild("PlayerGui")
+
+-- Ana Frame
+local MainFrame = Instance.new("Frame")
+MainFrame.Name = "MainFrame"
+MainFrame.Size = UDim2.new(0, 350, 0, 500)
+MainFrame.Position = UDim2.new(0.5, -175, 0.5, -250)
+MainFrame.BackgroundColor3 = Color3.fromRGB(30, 30, 40)
+MainFrame.BackgroundTransparency = 0.1
+MainFrame.BorderSizePixel = 0
+MainFrame.Active = true
+MainFrame.Draggable = true
+MainFrame.Parent = ScreenGui
+
+-- Yuvarlak köşeler
+local UICorner = Instance.new("UICorner")
+UICorner.CornerRadius = UDim.new(0, 12)
+UICorner.Parent = MainFrame
+
+-- Başlık
+local Title = Instance.new("TextLabel")
+Title.Size = UDim2.new(1, 0, 0, 40)
+Title.BackgroundColor3 = Color3.fromRGB(40, 40, 55)
+Title.Text = "🔪 MM2 Ultimate Script"
+Title.TextColor3 = Color3.new(1, 1, 1)
+Title.Font = Enum.Font.GothamBold
+Title.TextSize = 18
+Title.Parent = MainFrame
+
+local TitleCorner = Instance.new("UICorner")
+TitleCorner.CornerRadius = UDim.new(0, 12)
+TitleCorner.Parent = Title
+
+-- Kapatma butonu
+local CloseBtn = Instance.new("TextButton")
+CloseBtn.Size = UDim2.new(0, 30, 0, 30)
+CloseBtn.Position = UDim2.new(1, -35, 0, 5)
+CloseBtn.BackgroundColor3 = Color3.fromRGB(255, 80, 80)
+CloseBtn.Text = "X"
+CloseBtn.TextColor3 = Color3.new(1, 1, 1)
+CloseBtn.Font = Enum.Font.GothamBold
+CloseBtn.TextSize = 14
+CloseBtn.Parent = MainFrame
+
+local CloseCorner = Instance.new("UICorner")
+CloseCorner.CornerRadius = UDim.new(0, 8)
+CloseCorner.Parent = CloseBtn
+
+CloseBtn.MouseButton1Click:Connect(function()
+    MainFrame.Visible = false
+end)
+
+-- İçerik Alanı (Scroll)
+local ScrollFrame = Instance.new("ScrollingFrame")
+ScrollFrame.Size = UDim2.new(1, -20, 1, -60)
+ScrollFrame.Position = UDim2.new(0, 10, 0, 50)
+ScrollFrame.BackgroundTransparency = 1
+ScrollFrame.ScrollBarThickness = 6
+ScrollFrame.ScrollBarImageColor3 = Color3.fromRGB(100, 100, 150)
+ScrollFrame.Parent = MainFrame
+
+local ScrollLayout = Instance.new("UIListLayout")
+ScrollLayout.Padding = UDim.new(0, 8)
+ScrollLayout.SortOrder = Enum.SortOrder.LayoutOrder
+ScrollLayout.Parent = ScrollFrame
+
+-- Buton oluşturma yardımcısı
+local function CreateToggleButton(text, initialState, callback)
+    local btn = Instance.new("TextButton")
+    btn.Size = UDim2.new(1, 0, 0, 35)
+    btn.BackgroundColor3 = initialState and Color3.fromRGB(0, 150, 80) or Color3.fromRGB(60, 60, 80)
+    btn.Text = text .. (initialState and " [AÇIK]" or " [KAPALI]")
+    btn.TextColor3 = Color3.new(1, 1, 1)
+    btn.Font = Enum.Font.Gotham
+    btn.TextSize = 14
+    btn.Parent = ScrollFrame
+    
+    local corner = Instance.new("UICorner")
+    corner.CornerRadius = UDim.new(0, 8)
+    corner.Parent = btn
+    
+    local state = initialState
+    
+    btn.MouseButton1Click:Connect(function()
+        state = not state
+        btn.BackgroundColor3 = state and Color3.fromRGB(0, 150, 80) or Color3.fromRGB(60, 60, 80)
+        btn.Text = text .. (state and " [AÇIK]" or " [KAPALI]")
+        callback(state)
+    end)
+    
+    return btn
+end
+
+-- Ana kategoriler
+local categories = {
+    { name = "ESP", items = {
+        { "Tüm ESP", "ESP.Enabled", function(v) Config.ESP.Enabled = v end },
+        { "Tracers", "ESP.ShowTracers", function(v) Config.ESP.ShowTracers = v end },
+        { "Düşen Silah ESP", "ESP.ShowGunDrop", function(v) Config.ESP.ShowGunDrop = v end },
+    }},
+    { name = "Combat", items = {
+        { "Silah Silent Aim", "SilentAim.GunEnabled", function(v) Config.SilentAim.GunEnabled = v end },
+        { "Bıçak Silent Aim", "SilentAim.KnifeEnabled", function(v) Config.SilentAim.KnifeEnabled = v end },
+    }},
+    { name = "Movement", items = {
+        { "Bunny Hop", "Movement.BunnyHop", function(v) Config.Movement.BunnyHop = v end },
+        { "SpinBot", "Movement.SpinBot", function(v) Config.Movement.SpinBot = v end },
+    }},
+    { name = "Farm", items = {
+        { "Auto Coin Farm", "Farm.AutoCoin", function(v) Config.Farm.AutoCoin = v end },
+    }},
+    { name = "Misc", items = {
+        { "Anti-AFK", "Misc.AntiAFK", function(v) Config.Misc.AntiAFK = v end },
+    }}
+}
+
+-- Kategorileri ve butonları oluştur
+for _, category in pairs(categories) do
+    local header = Instance.new("TextLabel")
+    header.Size = UDim2.new(1, 0, 0, 30)
+    header.BackgroundColor3 = Color3.fromRGB(50, 50, 70)
+    header.Text = "  " .. category.name
+    header.TextColor3 = Color3.fromRGB(150, 200, 255)
+    header.Font = Enum.Font.GothamBold
+    header.TextSize = 15
+    header.TextXAlignment = Enum.TextXAlignment.Left
+    header.Parent = ScrollFrame
+    
+    local hCorner = Instance.new("UICorner")
+    hCorner.CornerRadius = UDim.new(0, 6)
+    hCorner.Parent = header
+    
+    for _, item in pairs(category.items) do
+        local currentState = false
+        -- Mevcut durumu al
+        if item[2] == "ESP.Enabled" then currentState = Config.ESP.Enabled end
+        if item[2] == "ESP.ShowTracers" then currentState = Config.ESP.ShowTracers end
+        if item[2] == "ESP.ShowGunDrop" then currentState = Config.ESP.ShowGunDrop end
+        if item[2] == "SilentAim.GunEnabled" then currentState = Config.SilentAim.GunEnabled end
+        if item[2] == "SilentAim.KnifeEnabled" then currentState = Config.SilentAim.KnifeEnabled end
+        if item[2] == "Movement.BunnyHop" then currentState = Config.Movement.BunnyHop end
+        if item[2] == "Movement.SpinBot" then currentState = Config.Movement.SpinBot end
+        if item[2] == "Farm.AutoCoin" then currentState = Config.Farm.AutoCoin end
+        if item[2] == "Misc.AntiAFK" then currentState = Config.Misc.AntiAFK end
+        
+        CreateToggleButton("  " .. item[1], currentState, item[3])
+    end
+end
+
+-- WalkSpeed Slider
+local speedLabel = Instance.new("TextLabel")
+speedLabel.Size = UDim2.new(1, 0, 0, 25)
+speedLabel.BackgroundTransparency = 1
+speedLabel.Text = "  WalkSpeed: " .. Config.Movement.WalkSpeed
+speedLabel.TextColor3 = Color3.new(1, 1, 1)
+speedLabel.Font = Enum.Font.Gotham
+speedLabel.TextSize = 14
+speedLabel.TextXAlignment = Enum.TextXAlignment.Left
+speedLabel.Parent = ScrollFrame
+
+local speedSlider = Instance.new("TextButton")
+speedSlider.Size = UDim2.new(1, 0, 0, 25)
+speedSlider.BackgroundColor3 = Color3.fromRGB(60, 60, 80)
+speedSlider.Text = "  Hızı Artır"
+speedSlider.TextColor3 = Color3.new(1, 1, 1)
+speedSlider.Font = Enum.Font.Gotham
+speedSlider.TextSize = 13
+speedSlider.Parent = ScrollFrame
+
+local speedSliderCorner = Instance.new("UICorner")
+speedSliderCorner.CornerRadius = UDim.new(0, 6)
+speedSliderCorner.Parent = speedSlider
+
+speedSlider.MouseButton1Click:Connect(function()
+    Config.Movement.WalkSpeed = math.min(Config.Movement.WalkSpeed + 10, 100)
+    speedLabel.Text = "  WalkSpeed: " .. Config.Movement.WalkSpeed
+    UpdateWalkSpeed()
+end)
+
+-- Fling butonu
+local flingBtn = Instance.new("TextButton")
+flingBtn.Size = UDim2.new(1, 0, 0, 35)
+flingBtn.BackgroundColor3 = Color3.fromRGB(200, 50, 50)
+flingBtn.Text = "  Hedefi Fırlat (Fling)"
+flingBtn.TextColor3 = Color3.new(1, 1, 1)
+flingBtn.Font = Enum.Font.GothamBold
+flingBtn.TextSize = 14
+flingBtn.Parent = ScrollFrame
+
+local flingCorner = Instance.new("UICorner")
+flingCorner.CornerRadius = UDim.new(0, 8)
+flingCorner.Parent = flingBtn
+
+flingBtn.MouseButton1Click:Connect(function()
+    -- En yakın oyuncuyu hedef al
+    local closest = nil
+    local shortestDist = math.huge
+    local myRoot = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
+    if myRoot then
+        for _, player in pairs(Players:GetPlayers()) do
+            if player ~= LocalPlayer and player.Character then
+                local root = player.Character:FindFirstChild("HumanoidRootPart")
+                if root then
+                    local dist = (root.Position - myRoot.Position).Magnitude
+                    if dist < shortestDist then
+                        shortestDist = dist
+                        closest = player
+                    end
+                end
+            end
+        end
+    end
+    if closest then
+        Config.Misc.FlingTarget = closest
+    end
+end)
+
+-- ============================================================
+-- SCRIPT SONU
+-- ============================================================
+print("✅ MM2 Ultimate Script başarıyla yüklendi!")
+print("📌 GitHub'dan loadstring ile çalıştırıldı.")
